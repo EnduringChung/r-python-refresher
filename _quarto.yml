@@ -3,6 +3,7 @@ project:
   render:
     - "*.qmd"
     - "!PLAN.md"
+    - "!projects/**"   # project briefs/solutions render locally, not on the site
 
 website:
   title: "R + Python Refresher"
