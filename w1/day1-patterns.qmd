@@ -44,8 +44,9 @@ predictable.
 > math), isolate it in a small function with a tidy wrapper.
 > :::
 
-All `{webr}` cells on a page **share one R session**, so `library()` once and
-every later cell can use it.
+All `{webr}` cells on a page **share one R session**, and all `{pyodide}`
+cells share one Python session — `library()` / `import` once and every later
+cell can use them.
 
 ## Pattern 1 — Vectorization
 
@@ -63,21 +64,28 @@ sqrt(x)                      # every math function is vectorized
 pmax(x, 5)                   # element-wise max against a scalar
 ```
 
-```python
-# Python: plain lists can't do this...
+```{pyodide}
+#| label: p1-py
+# Python: plain lists can't do this... numpy can
 import numpy as np
 x = np.array([2, 4, 6, 8])
 
-x * 2 + 1
-np.where(x > 4, "hi", "lo")
-np.sqrt(x)
-np.maximum(x, 5)
+print(x * 2 + 1)
+print(np.where(x > 4, "hi", "lo"))
+print(np.sqrt(x))
+print(np.maximum(x, 5))
 ```
 
 Why not loop? Three reasons: **speed** (C vs interpreter), **clarity** (the
 intent is "transform all of it"), and **safety** (no index bookkeeping, no
 off-by-one). A row-wise `for` loop over a data frame is almost always a
 vectorized one-liner in disguise.
+
+::: {.callout-tip}
+## R vs Python indexing heads-up
+R vectors are **1-indexed**; numpy arrays are **0-indexed**. Full table in
+[Day 2](day2-data-structures.qmd).
+:::
 
 ## Pattern 2 — The pipe (data first)
 
@@ -105,10 +113,17 @@ result <- summarise(by_cyl, mean_mpg = mean(mpg))
 rm(by_cyl)
 ```
 
-```python
+```{pyodide}
+#| label: p2-py
 # Python: the same "sentence" is method chaining
 import pandas as pd
-mtcars = pd.read_csv("https://raw.githubusercontent.com/vincentarelbundock/Rdatasets/master/csv/datasets/mtcars.csv")
+
+# small mtcars subset (in-browser cells avoid big downloads)
+mtcars = pd.DataFrame({
+    "mpg": [21.0, 21.0, 22.8, 18.7, 14.3, 24.4,
+            19.2, 17.3, 33.9, 21.5, 13.3, 32.4],
+    "cyl": [6, 6, 4, 8, 8, 4, 6, 8, 4, 4, 8, 4],
+})
 
 (mtcars
    .query("cyl != 4")
@@ -152,12 +167,15 @@ Two small habits that make Pattern 3 professional-grade:
 # 2. give defaults so the function has a sensible zero-argument behavior
 ```
 
-```python
+```{pyodide}
+#| label: p3-py
 def summarise_cyl(df, min_mpg=0):
     return (df[df["mpg"] >= min_mpg]
               .groupby("cyl")["mpg"]
               .agg(["count", "mean"])
               .reset_index())
+
+summarise_cyl(mtcars, min_mpg=15)
 ```
 
 ## Pattern 4 — The formula interface
@@ -180,11 +198,17 @@ Two reading rules:
   (`~ x + y`) is still a formula — just a structure spec (how DESeq2 uses it)
 - `+` inside a formula means "and also this term", **not** arithmetic
 
-```python
+```{pyodide}
+#| label: p4-py
 # Python borrowed the exact idea (patsy formula language)
+# NOTE: first run downloads statsmodels — takes ~30s once, then it's cached
+import pandas as pd
 import statsmodels.formula.api as smf
-fit = smf.ols("mpg ~ wt + C(cyl)", data=mtcars).fit()
-fit.params
+
+df = mtcars.assign(wt=[2.62, 2.875, 2.32, 3.44, 3.57, 3.19,
+                       3.92, 3.73, 1.835, 2.465, 3.84, 2.2])
+fit = smf.ols("mpg ~ wt + C(cyl)", data=df).fit()
+print(fit.params)
 ```
 
 Note the tiny dialect difference: R wraps a raw column with `factor(cyl)`,
@@ -235,10 +259,13 @@ Rule of thumb: `map()` for transformation, `walk()` for side-effects
 (plots, saves), `map_dfr()`/`list_rbind()` for "read many files, bind into
 one table".
 
-```python
+```{pyodide}
+#| label: p6-py
 genes = {"A": [3, 5, 8], "B": [1, 9], "C": [4, 4, 4, 4]}
-{k: sum(v) / len(v) for k, v in genes.items()}   # comprehension = map
-[sum(v) / len(v) for v in genes.values()]        # positional variant
+
+print({k: sum(v) / len(v) for k, v in genes.items()})   # comprehension = map
+print({k: len(v) for k, v in genes.items()})
+print({k: [x / sum(v) for x in v] for k, v in genes.items()})
 ```
 
 ## Pattern 7 — S3 dispatch (why `summary()` is psychic)
@@ -259,7 +286,7 @@ plot do here?" — the answer is always in the class. Discover the whole API
 of any object with `methods(class = "...")`.
 
 ```python
-# Python: the same concept is dunder methods + classes
+# Python: the same concept is dunder methods + classes (conceptual)
 # print(obj)  calls obj.__str__
 # len(obj)    calls obj.__len__
 # df.head()   is a method on the DataFrame class
@@ -300,10 +327,13 @@ mtcars$mpg_adj <- result
 4. Direct `df$col[i]` indexing is base dialect; data should flow through a pipe.
 :::
 
-```r
+```{webr}
+#| label: refactor-good
 # ✅ After: Pattern 1 + Pattern 2, one line of intent
 mtcars_adj <- mtcars |>
   mutate(mpg_adj = if_else(cyl > 4, mpg * 1.1, mpg))
+
+head(mtcars_adj, 3)
 ```
 
 One more — recognize before you scroll:
@@ -364,13 +394,46 @@ library(purrr)
 3. `mtcars |> arrange(desc(hp)) |> slice_head(n = 3)`
 4. `map_dbl(mtcars[, c("mpg", "hp", "wt")], mean)`
 5. `boxplot(mpg ~ am, data = mtcars)`
-6. `mtcars |> filter(mpg > median(mpg)) |> nrow()`
+6. `mtcars |> filter(mpg > median(mpg)) |> nrow()` — 15
 7. `map_dbl(c(2, 4, 8), \(v) v^3)`
 8. `mtcars |> mutate(z = mpg / wt) |> filter(z > 8) |> select(wt, z)`
 9. see Pattern 5 cell — `group_by({{ group_col }}) |> summarise(mean = mean({{ value_col }}))`
 10. `reduce(map_int(genes, length), `+`)` — or `sum(unlist(genes))`
 11. `mtcars |> count(cyl) |> arrange(desc(n))`
 12. `mtcars |> group_by(carb) |> summarise(top_hp = max(hp))`
+:::
+
+## Python drills (live pad)
+
+Same reflexes, other dialect. All numpy/pandas — predict first.
+
+```{pyodide}
+#| label: drills-py
+import numpy as np
+import pandas as pd
+
+# 1. Convert [15, 22, 9, 30] °C to °F
+
+# 2. Label cyl == 4 "low" / otherwise "high" for the mtcars subset
+
+# 3. Top 3 rows of mtcars by mpg, descending
+
+# 4. Mean of each column of mtcars
+
+# 5. Mean mpg per cyl count, sorted ascending by mean
+
+# 6. Rows where mpg is above the median mpg — how many?
+```
+
+::: {.callout-tip collapse="true"}
+## Expected answers (Python)
+1. `np.array([15, 22, 9, 30]) * 9 / 5 + 32`
+2. `np.where(mtcars["cyl"] == 4, "low", "high")`
+3. `mtcars.sort_values("mpg", ascending=False).head(3)`
+4. `mtcars.mean(numeric_only=True)`
+5. `mtcars.groupby("cyl")["mpg"].mean().sort_values()`
+6. `(mtcars[mtcars["mpg"] > mtcars["mpg"].median()])` then `len(...)` — 5
+   (median = 21.0, and ties don't count)
 :::
 
 ## Exercises
@@ -399,6 +462,31 @@ classify_gc(c(39.2, 55.1, 48.7, 61.0))
 classify_gc <- function(gc_scores, threshold = 50) {
   if_else(gc_scores > threshold, "high", "low")
 }
+```
+:::
+
+### Exercise 1b — same, in Python
+
+```{pyodide}
+#| exercise: ex-d1-vector-py
+import numpy as np
+
+def classify_gc(gc_scores, threshold=50):
+    ______
+
+print(classify_gc(np.array([39.2, 55.1, 48.7, 61.0])))
+```
+
+::: {.hint exercise="ex-d1-vector-py"}
+`np.where(gc_scores > threshold, "high", "low")`.
+:::
+
+::: {.solution exercise="ex-d1-vector-py"}
+```python
+import numpy as np
+
+def classify_gc(gc_scores, threshold=50):
+    return np.where(gc_scores > threshold, "high", "low")
 ```
 :::
 
@@ -433,7 +521,7 @@ heavy_summary <- mtcars |>
 
 Write `peak_table(df, group_col, value_col)` that returns one row per group
 with `n`, `mean`, `max` of the value column. It must work for ANY grouping
-column — test with `cyl` and with `am`.
+column — test with `cyl` and with `gear`.
 
 ```{webr}
 #| exercise: ex-d1-fn

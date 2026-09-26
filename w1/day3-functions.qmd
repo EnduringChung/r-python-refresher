@@ -42,9 +42,11 @@ status
 
 In Python the same idea is the ternary:
 
-```python
+```{pyodide}
+#| label: ifvalue-py
 score = 87
 grade = "A" if score > 90 else "B"
+print(grade)
 ```
 
 Where this matters daily: inside `mutate()`, `if_else()` *is* the value-form
@@ -74,7 +76,8 @@ would break the significance ladder. Unmatched values (and `NA` conditions)
 fall through to `.default`; if you skip `.default`, unmatched rows become
 `NA` — count them when you test.
 
-```python
+```{pyodide}
+#| label: casewhen-py
 import numpy as np, pandas as pd
 p = pd.Series([1e-12, 0.03, 0.2, 0.7])
 pd.Series(np.select(
@@ -117,15 +120,20 @@ for (i in 2:10) x[i] <- 0.5 * x[i - 1] + 1
 round(x, 3)
 ```
 
-```python
+```{pyodide}
+#| label: loops-py
 # Python: empty-range loops just don't run — no 1:0 trap
 v = []
 for i in range(len(v)):   # zero iterations
-    print(v[i])
+    print("never happens")
 
-# the same legit loop, pythonic version
+# the same legit loop, both flavors
 import itertools
-xs = list(itertools.accumulate(range(10), lambda acc, _: 0.5 * acc + 1, initial=1))[1:]
+
+xs = [1]
+for _ in range(9):
+    xs.append(0.5 * xs[-1] + 1)
+print([round(x, 3) for x in xs])
 ```
 
 ## Functions that don't embarrass you
@@ -160,7 +168,8 @@ Why name the conditions? Unnamed `stopifnot()` just prints the *call* that
 failed — useless for anyone who didn't write it. Named conditions print the
 message you wrote.
 
-```python
+```{pyodide}
+#| label: function-py
 import numpy as np
 
 def log2fc(treat, ctrl, pseudo=1):
@@ -169,6 +178,8 @@ def log2fc(treat, ctrl, pseudo=1):
     if treat.shape != ctrl.shape:
         raise ValueError("treat and ctrl must have the same shape")
     return np.log2((treat + pseudo) / (ctrl + pseudo))
+
+print(log2fc([32, 8], [2, 2]))
 ```
 
 Python's `assert` is *not* the same tool: asserts vanish under `python -O`
@@ -186,12 +197,13 @@ mean_style <- function(x, ...) {
 mean_style(c(1, NA, 3), na.rm = TRUE)
 ```
 
-```python
+```{pyodide}
+#| label: dots-py
 def mean_style(x, *args, **kwargs):
     print(f"extra kwargs: {kwargs}")
     return sum(x) / len(x)
 
-mean_style([1, 2, 3], na_rm=True)
+print(mean_style([1, 2, 3], na_rm=True))
 ```
 
 Use `...` to **forward arguments to inner functions** — that's its 90% use.
@@ -211,13 +223,17 @@ scale_to_brca1 <- make_scaler(center = 12.5)
 scale_to_brca1(c(10, 12.5, 20))
 ```
 
-```python
+```{pyodide}
+#| label: closure-py
 import numpy as np
 
 def make_scaler(center):
     def scale(x):
         return np.asarray(x) - center   # closure over center
     return scale
+
+scale_to_brca1 = make_scaler(12.5)
+print(scale_to_brca1([10, 12.5, 20]))   # array([-2.5,  0. ,  7.5])
 ```
 
 ::: {.callout-tip}
@@ -238,12 +254,14 @@ rescale <- function(x, lo = min(x), hi = max(x)) {
 rescale(c(10, 20, 30))     # defaults computed from THIS x
 ```
 
-```python
+```{pyodide}
+#| label: lazy-py
 # Python evaluates defaults ONCE at definition time — never do this:
 def danger(x, bucket=[]):        # the mutable-default bug
     bucket.append(x)
     return bucket
-print(danger(1), danger(2))      # [1], [1, 2]  ← shared list!
+
+print(danger(1), danger(2))      # [1] [1, 2]  ← shared list!
 ```
 
 **Quirk 2 — partial matching.** `mean(x = 1:3, na.rm = TRUE)` works, and so
@@ -299,6 +317,49 @@ library(dplyr)
 12. `is_monotonic <- function(x) { if (length(x) < 2) return(TRUE); all(diff(x) >= 0) }`
 :::
 
+## Python drills (live pad)
+
+```{pyodide}
+#| label: drills-py
+import numpy as np
+
+# 1. Assign "sig"/"ns" to p = 0.049 with a ternary
+
+# 2. np.select: label hp = np.array([90, 150, 250]) into "low"/"mid"/"high"
+
+# 3. safe_log(x) that raises ValueError("x must be > 0") when any x <= 0
+
+# 4. make_power(n) returning a function — call make_power(3)(2)
+
+# 5. np.where: mpg above median → "thirsty" else "sippy"
+
+# 6. Show the mutable-default bug yourself: call danger(1) twice in one line
+
+# 7. nth_root(x, n=2) with a guard; compute the 4th root of 81
+
+# 8. is_monotonic(x): True if non-decreasing; guard len < 2
+
+# 9. Write mean_style(x, **kwargs) forwarding to np.mean? No — just accept
+#    and ignore extra kwargs, print them
+
+# 10. dispatch: mapping = {"pearson": "cor", "spearman": "cov"}; look up
+#     "pearson" AND a missing key with .get(method, "unknown")
+```
+
+::: {.callout-tip collapse="true"}
+## Expected answers (Python)
+1. `status = "sig" if p < 0.05 else "ns"`
+2. `np.select([hp < 100, hp < 180], ["low", "mid"], default="high")`
+3. `def safe_log(x): x = np.asarray(x, float); if (x <= 0).any(): raise ValueError("x must be > 0"); return np.log(x)`
+4. `def make_power(n): return lambda x: x ** n` — then `make_power(3)(2)` → 8
+5. `np.where(mpg > mpg.mean(), "thirsty", "sippy")` — or `.median()`
+6. `danger(1); danger(1)` — returns `[1]` then `[1, 1]`
+7. `def nth_root(x, n=2): assert x >= 0 or n % 2 == 1, "even root of negative"; return x ** (1/n)` — `nth_root(81, 4)` → 3.0
+8. `def is_monotonic(x): return True if len(x) < 2 else bool((np.diff(x) >= 0).all())`
+9. `def mean_style(x, **kwargs): print(kwargs); return sum(x) / len(x)`
+10. `mapping.get("pearson", "unknown")` → "cor" · `.get("spearmanr", "unknown")` → "unknown" — no KeyError
+:::
+
 ## Exercises
 
 ### Exercise 1 — case_when classifier
@@ -331,6 +392,34 @@ genes |>
     expr < 20 ~ "medium",
     .default  = "high"
   ))
+```
+:::
+
+### Exercise 1b — same in Python
+
+```{pyodide}
+#| exercise: ex-d3-cw-py
+import pandas as pd, numpy as np
+
+genes = pd.DataFrame({"gene": ["XIST", "MYC", "GAPDH", "NONE"],
+                      "expr": [0.2, 55.0, 4.4, 12.0]})
+
+genes["level"] = ______
+print(genes)
+```
+
+::: {.hint exercise="ex-d3-cw-py"}
+`np.select([genes.expr < 1, genes.expr < 5, genes.expr < 20],
+["silent", "low", "medium"], default="high")`.
+:::
+
+::: {.solution exercise="ex-d3-cw-py"}
+```python
+genes["level"] = np.select(
+    [genes.expr < 1, genes.expr < 5, genes.expr < 20],
+    ["silent", "low", "medium"],
+    default="high"
+)
 ```
 :::
 

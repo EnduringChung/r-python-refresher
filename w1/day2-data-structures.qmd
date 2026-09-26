@@ -40,7 +40,8 @@ typeof(c(1L, 2L))    # integer (L suffix) vs double
 c(1, NA)             # NA fits in any type — it's "typed missing"
 ```
 
-```python
+```{pyodide}
+#| label: coercion-py
 [1, 2, "three"]   # fine, stays mixed — lists are heterogeneous by design
 ```
 
@@ -112,9 +113,12 @@ sample$metrics$reads            # chain $ through
 sample[["metrics"]][["pct_dup"]]
 ```
 
-```python
+```{pyodide}
+#| label: list-json-py
 sample = {"id": "S1", "metrics": {"reads": 5.2e6, "pct_dup": 8.3}, "pass_qc": True}
-sample["metrics"]["reads"]
+
+print(sample["metrics"]["reads"])
+print(sample["metrics"]["pct_dup"])
 ```
 
 ## The full indexing translation table
@@ -131,14 +135,15 @@ x[c(1, 5)]   # pick by positions
 x[x > 25 & x < 45]   # AND of conditions
 ```
 
-```python
+```{pyodide}
+#| label: r-index-py
 x = [10, 20, 30, 40, 50]
 
-x[1]            # 0-based pick            -> 20
-x[1:4]          # slice, end EXCLUSIVE    -> [20, 30, 40]
-del x[1]        # remove position 1; x is now [10, 30, 40, 50]
-[e for e in x if e > 25]        # logical filter -> [30, 40, 50]
-x[-2]           # ⚠️ NOT "drop the 2nd" — it's 2nd from the END -> 40
+print(x[1])                     # 0-based pick            -> 20
+print(x[1:4])                   # slice, end EXCLUSIVE    -> [20, 30, 40]
+del x[1]                        # remove position 1; x is now [10, 30, 40, 50]
+print([e for e in x if e > 25]) # logical filter -> [30, 40, 50]
+print(x[-2])                    # ⚠️ NOT "drop the 2nd" — it's 2nd from the END -> 40
 ```
 
 ::: {.callout-warning}
@@ -174,18 +179,19 @@ df[df$expr > 10, ]        # filter rows by condition
 length(df)         # 3 — the columns ARE the list elements
 ```
 
-```python
+```{pyodide}
+#| label: df-py
 import pandas as pd
 df = pd.DataFrame({
   "gene": ["BRCA1", "TP53", "MYC", "EGFR"],
   "chr":  [17, 17, 8, 7],
   "expr": [12.1, 40.3, 3.2, 8.8]})
 
-df["expr"]              # column as Series
-df.loc[0]               # row 0 BY LABEL
-df.iloc[0]              # row 0 BY POSITION
-df[["gene", "expr"]]    # columns by name
-df[df["expr"] > 10]     # filter rows
+print(df["expr"], "\n")      # column as Series
+print(df.loc[0], "\n")       # row 0 BY LABEL
+print(df.iloc[0], "\n")      # row 0 BY POSITION
+print(df[["gene", "expr"]], "\n")  # columns by name
+print(df[df["expr"] > 10])   # filter rows
 ```
 
 ::: {.callout-tip}
@@ -214,13 +220,14 @@ NA == NA                # NA! ("unknown == unknown" is unknown)
 v[v == NA]              # ⚠️ never works — use is.na()
 ```
 
-```python
+```{pyodide}
+#| label: na-py
 import numpy as np, pandas as pd
 v = pd.Series([1, np.nan, 3])
 
-v.mean()            # pandas SKIPS nan by default (opposite default!)
-v.isna()            # where are the NAs?
-v[v.isna()]         # filter to the missing rows
+print(v.mean())     # pandas SKIPS nan by default (opposite default!)
+print(v.isna())     # where are the NAs?
+print(v[v.isna()])  # filter to the missing rows
 ```
 
 ::: {.callout-important}
@@ -243,9 +250,14 @@ for (f in files) out <- c(out, read_one(f))
 out <- map(files, read_one) |> list_rbind()
 ```
 
-```python
+```{pyodide}
+#| label: grow-py
 # ✅ same shape in Python: build a list of frames, concat once
-out = pd.concat([read_one(f) for f in files])
+import pandas as pd
+
+frames = [pd.DataFrame({"file": [f], "n": [len(f)]}) for f in ["a", "b", "c"]]
+out = pd.concat(frames, ignore_index=True)
+out
 ```
 
 ## Drills (live pad)
@@ -297,6 +309,40 @@ v <- c(5, NA, 12, NA, 3)
 10. 4 values above 30 (32.4, 30.4, 33.9, 30.4)
 11. `setNames(c(2, 3), c("ctrl", "treated"))["treated"]`
 12. `lst$qc` → TRUE · `lst$dna` → NULL (no error — $ never errors)
+:::
+
+## Python drills (live pad)
+
+Same reflexes, other dialect.
+
+```{pyodide}
+#| label: drills-py
+d = {"id": "sample_42", "reads": [100, 250, 175], "qc": True}
+import pandas as pd
+
+# 1. Get "sample_42" two different ways
+
+# 2. Get the SECOND read
+
+# 3. Slice [100, 250] out of the reads list (one expression)
+
+# 4. What is d[-1]... wait, dicts don't support that. Get the LAST dict KEY
+#    (careful: insertion order)
+
+# 5. Build a one-row DataFrame and select the "qc" value with .iloc
+
+# 6. pd.Series([5, None, 12]): count missing, then mean — R vs pandas
+#    default behavior: which one needed na.rm?
+```
+
+::: {.callout-tip collapse="true"}
+## Expected answers (Python)
+1. `d["id"]` or `d.get("id")`
+2. `d["reads"][1]` — 0-based!
+3. `d["reads"][:2]`
+4. `list(d)[-1]` — dicts preserve insertion order (since 3.7)
+5. `pd.DataFrame({"qc": [True]}).iloc[0]["qc"]`
+6. `s.isna().sum()` → 1 · `s.mean()` → 8.5 **without** any na flag — the flip
 :::
 
 ## Exercises
@@ -432,6 +478,37 @@ b) `if_else(is.na(x), mean(x, na.rm = TRUE), x)` · c) `which(is.na(x))`
 sum(is.na(x))                                    # 2
 if_else(is.na(x), mean(x, na.rm = TRUE), x)      # 3 4 7 4 2
 which(is.na(x))                                  # 2 4
+```
+:::
+
+### Exercise 6 — the same in Python
+
+```{pyodide}
+#| exercise: ex-d2-na-py
+import numpy as np
+import pandas as pd
+
+s = pd.Series([3, np.nan, 7, np.nan, 2])
+# a) count missing
+# b) fill NAs with the mean of the rest (one method!)
+# c) positions of the NAs (as integer positions)
+______
+
+print(s.isna().sum())
+print(s.fillna(s.mean()))
+print(list(s[s.isna()].index))
+```
+
+::: {.hint exercise="ex-d2-na-py"}
+`isna().sum()`, `fillna(s.mean())`, `s[s.isna()].index` — pandas has a
+dedicated imputation method where R needs `if_else`.
+:::
+
+::: {.solution exercise="ex-d2-na-py"}
+```python
+s.isna().sum()          # 2
+s.fillna(s.mean())      # 3.0, 4.0, 7.0, 4.0, 2.0
+list(s[s.isna()].index) # [1, 3]
 ```
 :::
 

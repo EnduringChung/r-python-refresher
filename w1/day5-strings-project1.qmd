@@ -39,15 +39,16 @@ str_detect(ids, "\\d{2}")           # contains a 2-digit number?
 str_extract(ids, "\\d+")            # pull the number out
 ```
 
-```python
+```{pyodide}
+#| label: strings-py
 import re
 ids = [" sample_038 ", "SAMPLE-42", "sample_7"]
 
-[s.strip() for s in ids]
-[s.strip().lower() for s in ids]
-[s.replace("-", "_") for s in ids]
-[bool(re.search(r"\d{2}", s)) for s in ids]
-[re.search(r"\d+", s).group() for s in ids]
+print([s.strip() for s in ids])
+print([s.strip().lower() for s in ids])
+print([s.replace("-", "_") for s in ids])
+print([bool(re.search(r"\d{2}", s)) for s in ids])
+print([re.search(r"\d+", s).group() for s in ids])
 ```
 
 The full tidy workflow composes into one pipe — this exact pattern will be
@@ -94,13 +95,14 @@ fct_lump(c(rep("A", 10), "B", "C", "D"), n = 1)  # rare levels -> "Other"
 fct_recode(treat, control = "ctrl")   # rename a level (new = old!)
 ```
 
-```python
+```{pyodide}
+#| label: factors-py
 import pandas as pd
 treat = pd.Categorical(["ctrl", "treated", "treated", "ctrl"],
                        categories=["ctrl", "treated"])
-treat.codes          # the codes underneath
-treat.categories     # the level table
-pd.Series(treat).cat.rename_categories({"ctrl": "control"})
+print(treat.codes)          # the codes underneath
+print(treat.categories)     # the level table
+print(pd.Series(treat).cat.rename_categories({"ctrl": "control"}))
 ```
 
 ::: {.callout-important}
@@ -117,10 +119,11 @@ The project file mixes `2024-03-01`, `03/10/2024`, and `March 11, 2024`.
 In R you'd parse with `parse_date_time(orders = ...)`. Python's
 `pd.to_datetime(format="mixed")` (pandas ≥ 2.0) does the same job:
 
-```python
+```{pyodide}
+#| label: dates-mixed-py
 import pandas as pd
 s = pd.Series(["2024-03-01", "03/10/2024", "March 11, 2024"])
-pd.to_datetime(s, format="mixed")
+print(pd.to_datetime(s, format="mixed"))
 ```
 
 And the point of parsing is arithmetic — durations, floors, weekday rolls:
@@ -138,13 +141,14 @@ floor_date(d2, "week")           # rolls back to Sunday
 seq(d1, by = "week", length.out = 3)   # a date sequence
 ```
 
-```python
+```{pyodide}
+#| label: dates-py
 from datetime import date, timedelta
 d1 = date(2024, 3, 1)
 d2 = date(2024, 3, 14)
-(d2 - d1).days                   # 13
-d2.strftime("%A")                # 'Thursday'
-d1 + timedelta(weeks=2)          # date(2024, 3, 15)
+print((d2 - d1).days)            # 13
+print(d2.strftime("%A"))         # 'Thursday'
+print(d1 + timedelta(weeks=2))   # 2024-03-15
 ```
 
 ::: {.callout-warning}
@@ -225,6 +229,39 @@ peptides <- c("AngII", "substance P", "BRADYKININ", "AngII")
 10. `1 2 2` — factor codes are 1-based level indices, not 0/1
 11. "ATG" and "ATA" — str_sub handles start>0, and negative end = from tail
 12. `str_length(c("ATG","ATGGCC",""))` — 3, 6, 0
+:::
+
+## Python drills (live pad)
+
+```{pyodide}
+#| label: drills-py
+import re
+import pandas as pd
+
+peptides = ["AngII", "substance P", "BRADYKININ", "AngII"]
+
+# 1. Normalize: strip + lower — list comprehension
+
+# 2. Which peptides contain "ang" ignoring case? (one comprehension)
+
+# 3. Extract the digits from c("batch1_v2", "batch12_v1") — re.search
+
+# 4. pd.Series(["no", "yes", "yes"]).astype("category") — print .cat.categories
+
+# 5. Parse ["03/10/2024", "03/15/2024"] to datetime with an explicit format
+#    string (hint: %m/%d/%Y)
+
+# 6. (date(2026, 12, 31) - date.today()).days — how many days left in 2026?
+```
+
+::: {.callout-tip collapse="true"}
+## Expected answers (Python)
+1. `[p.strip().lower() for p in peptides]`
+2. `["ang" in p.lower() for p in peptides]` — or `re` with `re.I`
+3. `[re.search(r"\d+", s).group() for s in ["batch1_v2", "batch12_v1"]]` — "1", "12"
+4. `Index(['no', 'yes'], dtype='object')` — same level table concept as R
+5. `pd.to_datetime(..., format="%m/%d/%Y")` — explicit beats guessing
+6. A shrinking number — dates are just integers with a costume on
 :::
 
 ## 🧪 Project 1 — Clean the peptide assay

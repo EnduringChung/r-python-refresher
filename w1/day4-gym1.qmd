@@ -104,7 +104,8 @@ two_sum <- function(nums, target) {
 two_sum(c(4, 7, 11, 2, 15), 18)
 ```
 
-```python
+```{pyodide}
+#| label: twosum-py
 def two_sum(nums, target):
     seen = {}                      # value -> position
     for i, x in enumerate(nums):
@@ -113,7 +114,7 @@ def two_sum(nums, target):
         seen[x] = i
     return None
 
-two_sum([4, 7, 11, 2, 15], 18)
+print(two_sum([4, 7, 11, 2, 15], 18))
 ```
 
 Both O(n) time, O(n) space. **The pattern: walk once, ask the hash map for
@@ -130,11 +131,12 @@ has_duplicate <- function(x) anyDuplicated(x) > 0
 has_duplicate(c(1, 2, 3, 2))   # TRUE — stops at the first dup
 ```
 
-```python
+```{pyodide}
+#| label: dup-py
 def has_duplicate(x):
     return len(set(x)) < len(x)
 
-has_duplicate([1, 2, 3, 2])    # True
+print(has_duplicate([1, 2, 3, 2]))    # True
 ```
 
 Two idioms, same O(n). Note what you'd NOT write: `sum(duplicated(x)) > 0`
@@ -153,7 +155,8 @@ first_recurring <- function(s) {
 first_recurring("abba")     # "b" — b repeats at position 3, before a's repeat
 ```
 
-```python
+```{pyodide}
+#| label: recur-py
 def first_recurring(s):
     seen = set()
     for ch in s:
@@ -162,7 +165,7 @@ def first_recurring(s):
         seen.add(ch)
     return None
 
-first_recurring("abba")    # 'b' — it recurs at position 3, before 'a' repeats
+print(first_recurring("abba"))    # 'b' — it recurs at position 3, before 'a' repeats
 ```
 
 Same answer by different machinery: R marks duplicates in one vectorized
@@ -183,13 +186,16 @@ is_anagram <- function(a, b) {
 is_anagram("Listen", "Silent")
 ```
 
-```python
+```{pyodide}
+#| label: anagram-py
 from collections import Counter
 
 def is_anagram(a, b):
     return Counter(a.lower()) == Counter(b.lower())
 
-is_anagram("Listen", "Silent")
+print(is_anagram("Listen", "Silent"))
+print(Counter("mississippi"))           # the full count table
+print(Counter("mississippi")["z"])      # missing keys are FREE (0, not NA)
 ```
 
 ::: {.callout-tip}
@@ -214,12 +220,13 @@ missing_number <- function(nums) {
 missing_number(c(0, 1, 3, 4, 5))
 ```
 
-```python
+```{pyodide}
+#| label: missing-py
 def missing_number(nums):
     n = len(nums)
     return n * (n + 1) // 2 - sum(nums)
 
-missing_number([0, 1, 3, 4, 5])    # 2
+print(missing_number([0, 1, 3, 4, 5]))    # 2
 ```
 
 Lesson: the *fourth* step of the method isn't always a hash map — it's "is
@@ -249,7 +256,8 @@ max_profit <- function(prices) {
 max_profit(c(7, 1, 5, 3, 6, 4))
 ```
 
-```python
+```{pyodide}
+#| label: profit-py
 def max_profit(prices):
     best = 0
     min_so_far = prices[0]
@@ -258,7 +266,7 @@ def max_profit(prices):
         min_so_far = min(min_so_far, p)
     return best
 
-max_profit([7, 1, 5, 3, 6, 4])    # 5  (buy 1, sell 6)
+print(max_profit([7, 1, 5, 3, 6, 4]))    # 5  (buy 1, sell 6)
 ```
 
 **Running-minimum + best-so-far** is a core pattern; it returns as "kadane's
@@ -310,6 +318,35 @@ algorithm" and as fold-change QC logic in genomics.
 11. `seen[[name]]` lookups hash the names; `%in%` scans — same symbol, 
     different cost. In R use named vectors/dupes-detection instead of scanning
 12. `rev(x)` · `x[length(x):1]` · loop with `x[n - i + 1]`
+:::
+
+## Python drills (live pad)
+
+```{pyodide}
+#| label: drills-py
+# 1. len(set([3, 5, 5, 1])) < len([3, 5, 5, 1]) — predict, then run
+
+# 2. set([1,2,2,3]) & set([2,2,4]) — set intersection; predict the type & value
+
+# 3. Counter("mississippi").most_common(2) — the top 2 letters
+
+# 4. two_sum([5, 5], 10) — predict BEFORE running (the ordering trap)
+
+# 5. missing_number with the math trick on [3, 0, 1]
+
+# 6. dict lookup cost: why is `if x in seen` O(1) while `if x in list` is O(n)?
+#    (write the answer as a comment, then ask me if unsure)
+```
+
+::: {.callout-tip collapse="true"}
+## Expected answers (Python)
+1. `True` — the classic dedupe-membership test
+2. `{2}` — a set (braces, not list); unique shared values
+3. `[('i', 4), ('s', 4)]` — (char, count) tuples, ties in insertion order
+4. `[5, 5]` — check-first ordering: when the second 5 arrives, partner 5 is
+   already in `seen`, so it pairs correctly and never with itself
+5. `2` — n=3 → 3·4/2=6 minus sum(3+0+1)=4 → 2
+6. dict/set hashing vs linear scan — the whole point of today's pattern
 :::
 
 ## Exercises
