@@ -200,6 +200,6 @@ R and Python Refresher/
 - [x] Project 3 scaffolding: `projects/p3/bioseqkitr` (R pkg, installs, gc tests green) + `projects/p3/bioseqkit_py` (pytest green, stubs skip-marked) + `.github/workflows/bioseqkit.yml` CI (runs on `projects/p3/**` changes)
 - [x] Week 4 RNA-seq plumbing: `scripts/rnaseq/` — synthetic counts (seed 2024), DESeq2 + edgeR scripts **run and outputs committed** (40 sig genes, 39/40 planted recovered by both), PyDESeq2 script authored (needs `pip install pydeseq2` locally to generate its output)
 - [x] **Week 3 content**: OOP/architecture lessons, repro stack, Algorithm Gym #3, W3D5 lesson wiring up the p3 scaffold (unskip tests → CI green)
-- [ ] **Week 4 content**: ML lessons, sequences, frozen DESeq2/edgeR lessons embedding `scripts/rnaseq/output/` artifacts, Algorithm Gym #4, Project 4
-- [ ] **Week 5 content**: single-cell (Colab badges), trajectories/pseudotime, HMMs from scratch, multi-omics, capstone
+- [x] **Week 4 content**: ML lessons, sequences, frozen DESeq2/edgeR lessons embedding `scripts/rnaseq/output/` artifacts, Algorithm Gym #4, Project 4 — P4 dataset recalibrated (10-gene signature, depth jitter; logistic CV ~0.76, boost needs `min_child_samples=5` on n=45)
+- [ ] **Week 5 content**: single-cell (Colab badges), trajectories/pseudotime, HMMs from scratch, multi-omics, capstone *(assigned to parallel builder — note W4D4 built the from-scratch Viterbi in R+Python already; extend, don't duplicate)*
 - [ ] Consider Posit Cloud path for R-Bioconductor lessons on iPad (open decision)
