@@ -1,0 +1,755 @@
+---
+title: "Day 5 — Statistics + Project 2"
+subtitle: "Week 2 · the test battery in both dialects, formula interfaces, and your first reproducible report"
+---
+
+## Cheat sheet (60 seconds)
+
+| Task | R | Python |
+|---|---|---|
+| summary stats | `summary(x)` | `df.describe()` |
+| draw random normals | `set.seed(42); rnorm(10)` | `rng = np.random.default_rng(42); rng.normal(size=10)` |
+| normal pdf/cdf/quantile | `dnorm` / `pnorm` / `qnorm` | `norm.pdf` / `norm.cdf` / `norm.ppf` |
+| normality test | `shapiro.test(x)` | `st.shapiro(x)` |
+| two-sample t-test | `t.test(y ~ g, data = d)` | `st.ttest_ind(a, b, equal_var=False)` |
+| Mann-Whitney U | `wilcox.test(y ~ g, data = d)` | `st.mannwhitneyu(a, b)` |
+| ANOVA | `summary(aov(y ~ f, data = d))` | `anova_lm(ols("y ~ C(f)", d).fit())` |
+| two-way ANOVA | `aov(y ~ f1 * f2)` | `ols("y ~ C(f1) * C(f2)", d).fit()` |
+| χ² independence | `chisq.test(table(x, y))` | `st.chi2_contingency(tab)` |
+| correlation + test | `cor.test(x, y)` | `st.pearsonr(x, y)` |
+| linear model | `lm(y ~ x1 + x2, data = d)` | `ols("y ~ x1 + x2", data=d).fit()` |
+| coefficient table | `broom::tidy(fit)` | `fit.params / .bse / .pvalues` |
+| model summary | `summary(fit)` | `print(fit.summary())` |
+| logistic regression | `glm(y ~ x, family = binomial)` | `logit("y ~ x").fit()` |
+| environment receipt | `sessionInfo()` | `pd.show_versions()` |
+
+## Randomness with a receipt
+
+Every simulated dataset, permutation, and train/test split this week is
+random — which means every one of them is **reproducible only with a seed**.
+This is where the course-wide reproducibility thread starts.
+
+```{webr}
+#| label: seed-r
+set.seed(42)
+rnorm(3)
+set.seed(42)
+rnorm(3)        # identical — the seed is the receipt
+```
+
+```{pyodide}
+#| label: seed-py
+import numpy as np
+rng = np.random.default_rng(42)
+print(rng.normal(size=3))
+rng2 = np.random.default_rng(42)
+print(rng2.normal(size=3))   # identical
+```
+
+::: {.callout-important}
+## The modern Python RNG — don't use the old one
+`np.random.seed(42)` + `np.random.normal()` is the *legacy* global-RNG API
+(scattered through old AI-generated code). Modern NumPy creates an explicit
+generator: `rng = np.random.default_rng(42)` — seed once, pass `rng` around,
+no hidden global state. R has no equivalent split: `set.seed()` *is* the
+API. Write the seed into the report, not just the session.
+:::
+
+## Distributions: the four-letter mnemonic
+
+R names them d-p-q-r (density, probability, quantile, random); scipy stacks
+them on one distribution object (`norm`, `t`, `chi2`, `expon`...):
+
+```{webr}
+#| label: dist-r
+pnorm(1.96)               # P(Z <= 1.96)  — the famous 0.975
+qnorm(0.975)              # inverse: which z cuts off 2.5%?
+dnorm(0)                  # height of the curve at 0
+set.seed(1)
+round(rnorm(5), 2)        # five draws
+shapiro.test(rnorm(200))  # normality check (p > 0.05 = no evidence against)
+```
+
+```{pyodide}
+#| label: dist-py
+import numpy as np
+from scipy import stats as st
+
+rng = np.random.default_rng(1)
+print(st.norm.cdf(1.96))                # 0.975
+print(st.norm.ppf(0.975))               # 1.96
+print(st.norm.pdf(0))                   # 0.399
+print(np.round(rng.normal(size=5), 2))
+print(st.shapiro(rng.normal(size=200)).pvalue)
+```
+
+::: {.callout-tip}
+## Why Day 3's histogram mattered
+The concentration data we plotted on Wednesday was **right-skewed** — and
+skew breaks t-tests/ANOVA assumptions. The EDA-to-test pipeline is:
+**plot → check normality (Shapiro) → transform if needed → test on the
+fixed scale.** Run the test on the *log* scale; report geometric means.
+:::
+
+## The t-test — and the defaults trap
+
+> Does treated differ from control? Seeded lognormal demo data first:
+
+```{webr}
+#| label: ttest-r
+set.seed(42)
+dat <- data.frame(
+  conc = c(rlnorm(50, log(25), 0.6), rlnorm(50, log(25) + 0.4, 0.6)),
+  group = rep(c("control", "treated"), each = 50)
+)
+
+t.test(conc ~ group, data = dat)          # formula interface — your default
+t.test(conc ~ group, data = dat, var.equal = TRUE)$p.value  # Student version
+```
+
+```{pyodide}
+#| label: ttest-py
+import numpy as np
+from scipy import stats as st
+
+rng = np.random.default_rng(42)
+control = rng.lognormal(mean=np.log(25), sigma=0.6, size=50)
+treated = rng.lognormal(mean=np.log(25) + 0.4, sigma=0.6, size=50)
+
+print(st.ttest_ind(treated, control, equal_var=False))    # Welch — like R
+print(st.ttest_ind(treated, control))                     # Student — scipy's default!
+```
+
+::: {.callout-important}
+## The defaults are NOT aligned — memorize this
+R's `t.test` runs **Welch's** test by default (`var.equal = FALSE`) — no
+equal-variance assumption. scipy's `ttest_ind` runs **Student's** test
+(`equal_var = TRUE`) unless you say otherwise. Copy scipy defaults into a
+report and you've silently changed the test. In this course:
+`equal_var=False`, always, unless you've *checked* variances and can defend it.
+:::
+
+Log-scale rerun (the fix for skew — medians and geometric means):
+
+```{webr}
+#| label: ttest-log-r
+t.test(log(conc) ~ group, data = dat)$p.value
+aggregate(conc ~ group, data = dat, FUN = median)
+```
+
+```{pyodide}
+#| label: ttest-log-py
+import pandas as pd
+dat = pd.DataFrame({
+  "conc":  np.concatenate([control, treated]),
+  "group": ["control"] * 50 + ["treated"] * 50})
+
+print(st.ttest_ind(np.log10(dat[dat.group == "treated"].conc),
+                   np.log10(dat[dat.group == "control"].conc),
+                   equal_var=False).pvalue)
+print(dat.groupby("group").conc.median())
+```
+
+## ANOVA: one formula, both dialects
+
+More than two groups — or two factors at once — is ANOVA. The R formula
+`y ~ f1 * f2` means "both main effects **and** their interaction"; the
+statsmodels twin needs `C(...)` to mark categorical columns:
+
+```{webr}
+#| label: anova-r
+set.seed(7)
+tw <- data.frame(
+  conc = c(rnorm(30, 25, 5), rnorm(30, 27, 5), rnorm(30, 24, 5)),
+  treatment = rep(c("control", "treated"), each = 45),
+  peptide = rep(c("SubP", "Vaso", "Brady"), each = 15, times = 2)
+)
+
+fit_r <- aov(conc ~ treatment * peptide, data = tw)
+summary(fit_r)
+```
+
+```{pyodide}
+#| label: anova-py
+import numpy as np, pandas as pd
+from statsmodels.formula.api import ols
+from statsmodels.stats.anova import anova_lm
+
+rng = np.random.default_rng(7)
+n = 15
+tw = pd.DataFrame({
+  "conc": np.concatenate([rng.normal(25, 5, n*3), rng.normal(27, 5, n*3)]),
+  "treatment": ["control"]*(n*3) + ["treated"]*(n*3),
+  "peptide": (["SubP"]*n + ["Vaso"]*n + ["Brady"]*n) * 2})
+
+fit_py = ols("conc ~ C(treatment) * C(peptide)", data=tw).fit()
+print(anova_lm(fit_py, typ=2))
+```
+
+Same table shape: sum of squares, df, F, p — one row per term, interaction
+last. `typ=2` matches R's `aov` for balanced designs (unbalanced: type II is
+the statsmodels default recommendation, and R's `car::Anova(type = 2)` —
+note that plain `summary(aov(...))` uses sequential/type-I, a classic
+unbalanced-design footgun for another day).
+
+## χ²: categories vs categories
+
+> Are the *missing* wells concentrated in one batch? (This is exactly the
+> Project 2 data: 13 missing concentrations across batches B1–B3.)
+
+```{webr}
+#| label: chisq-r
+miss <- matrix(c(37, 3, 33, 7, 37, 3), nrow = 3, byrow = TRUE,
+               dimnames = list(batch = c("B1", "B2", "B3"),
+                               missing = c("no", "yes")))
+chisq.test(miss)
+```
+
+```{pyodide}
+#| label: chisq-py
+from scipy import stats as st
+import pandas as pd
+
+miss = pd.DataFrame([[37, 3], [33, 7], [37, 3]],
+                    index=["B1", "B2", "B3"], columns=["no", "yes"])
+chi2, p, dof, expected = st.chi2_contingency(miss)
+print(f"chi2={chi2:.3f}  dof={dof}  p={p:.3f}")
+print(pd.DataFrame(expected.round(1),
+                   index=miss.index, columns=miss.columns))  # R hides these
+```
+
+p = 0.25: no evidence missingness depends on batch — the machines weren't
+selectively failing. Guard: χ² wants expected counts ≥ 5; scipy hands you
+`expected` to check (R warns automatically). `correct=False` if you want
+R's behavior for 2×2 tables (scipy applies Yates continuity correction by
+default, R doesn't — another defaults flip).
+
+## Correlation
+
+```{webr}
+#| label: cor-r
+set.seed(3)
+x <- rnorm(100)
+y <- 0.7 * x + rnorm(100, sd = 0.7)
+cor(x, y)
+cor.test(x, y)     # adds p-value + confidence interval
+```
+
+```{pyodide}
+#| label: cor-py
+import numpy as np
+from scipy import stats as st
+rng = np.random.default_rng(3)
+x = rng.normal(size=100)
+y = 0.7 * x + rng.normal(scale=0.7, size=100)
+r, p = st.pearsonr(x, y)     # NOTE: r FIRST, then p — R's cor.test lists
+print(round(r, 3), p)        # estimate last. Read outputs before indexing.
+```
+
+## Regression + the broom ↔ statsmodels table ritual
+
+The formula interface is the shared language — `y ~ x1 + x2` means the same
+thing in `lm()` and `ols()`. The reporting ritual differs:
+**broom makes tidy little tables; statsmodels prints a big one**:
+
+```{webr}
+#| label: lm-r
+library(broom)
+fit <- lm(od ~ hour, data = data.frame(hour = 0:4,
+                                       od = c(0.05, 0.12, 0.30, 0.72, 1.40)))
+tidy(fit)          # one row per coefficient: estimate, std.error, statistic, p.value
+glance(fit)        # one row per model: r.squared, AIC, ...
+```
+
+```{pyodide}
+#| label: lm-py
+import pandas as pd
+from statsmodels.formula.api import ols
+
+od = pd.DataFrame({"hour": range(5),
+                   "od": [0.05, 0.12, 0.30, 0.72, 1.40]})
+fit = ols("od ~ hour", data=od).fit()
+print(pd.DataFrame({"estimate": fit.params,
+                    "std.error": fit.bse,
+                    "statistic": fit.tvalues,
+                    "p.value": fit.pvalues}), "\n")   # ← your tidy()
+print(fit.rsquared)                                  # ← glance(), spread out
+```
+
+Logistic regression — same shape, `glm(binomial)` ↔ `logit()`:
+
+```{webr}
+#| label: glm-r
+fit_g <- glm(vs ~ wt + hp, data = mtcars, family = binomial)
+broom::tidy(fit_g)
+```
+
+```{pyodide}
+#| label: glm-py
+import pandas as pd
+from statsmodels.formula.api import logit
+
+mtcars = pd.DataFrame({
+  "vs": [0,0,1,1,0,1,0,1,1,1,1,0,0,0,0,0,0,1,1,1,1,0,0,0,0,1,0,1,0,0,0,1],
+  "wt": [2.62,2.875,2.32,3.215,3.44,3.46,3.57,3.19,3.15,3.44,3.44,4.07,
+         3.73,3.78,5.25,5.424,5.345,2.2,1.615,1.835,2.465,3.52,3.435,3.84,
+         3.845,1.935,2.14,1.513,3.17,2.77,3.57,2.78],
+  "hp": [110,110,93,110,175,105,245,62,95,123,123,180,180,180,205,215,
+         230,66,52,65,97,150,150,245,175,66,91,113,264,175,335,109]})
+
+fit_l = logit("vs ~ wt + hp", data=mtcars).fit(disp=0)
+print(fit_l.summary2().tables[1])   # coefficient table, broom-style
+```
+
+## Can my test even detect the effect? (the power simulation)
+
+A null p-value is ambiguous: no effect, **or** an effect you had no power to
+see. The 20-line simulation that resolves this is the single most valuable
+statistical habit you can build — and it needs a seed:
+
+```{webr}
+#| label: power-r
+set.seed(42)
+n <- 50
+pvals <- replicate(500, {
+  t.test(rlnorm(n, log(25) + 0.4, 0.6),      # treated: +50% effect
+         rlnorm(n, log(25), 0.6))$p.value
+})
+mean(pvals < 0.05)    # empirical power: ~0.84 — at n = 50 this design
+                      # catches most true +50% effects. A null now means
+                      # "no effect that big", not "we looked at nothing".
+```
+
+```{pyodide}
+#| label: power-py
+import numpy as np
+from scipy import stats as st
+
+rng = np.random.default_rng(42)
+n = 50
+pvals = [st.ttest_ind(rng.lognormal(np.log(25) + 0.4, 0.6, n),
+                      rng.lognormal(np.log(25), 0.6, n),
+                      equal_var=False).pvalue
+         for _ in range(500)]
+print(np.mean(np.array(pvals) < 0.05))
+```
+
+Power scales hard with n: at n = 20 you'd miss most +50% effects, at n = 50
+you'd catch ~84%. A null p-value is only interpretable **next to** its power
+estimate — which is why Q4 lives in Project 2. Rerun the simulation at your
+real n before interpreting your real p-value: that's the reproducibility
+thread made practical.
+
+## The hand-off receipt
+
+Every analysis you ship from now on ends with:
+
+| Receipt | R | Python |
+|---|---|---|
+| seed(s) | `set.seed()` — in the script, once | `default_rng(42)` — the rng object is the seed |
+| package versions | `sessionInfo()` | `pd.show_versions()` |
+| run date | `Sys.time()` | `datetime.date.today()` |
+| data checksum | `tools::md5sum(path)` | `hashlib.md5(open(path,'rb').read()).hexdigest()` |
+
+Project 2 enforces all four.
+
+## Project 2 — the full EDA + statistical report
+
+::: {.callout-note}
+## The brief
+
+**Data**: `data/peptides_assay_clean.csv` — the tidy table you (or the P1
+solutions) produced: 120 wells × 7 columns, 13 missing concentrations.
+**Deliverable**: a Quarto HTML report (`report.qmd` → `report.html`) backed
+by runnable analysis scripts, in **both** dialects with identical numbers.
+
+**Required sections** (in this order):
+
+1. **Setup** — load packages, `set.seed(42)` / `default_rng(42)`, read the
+   data, print dimensions
+2. **EDA** — structure; missingness counts; the concentration histogram
+   (Day 3 rules: labels, bins, title). Spot the skew, then log10-transform
+   and show the fixed histogram. Shapiro before/after (it's lognormal:
+   p ≈ 6e-8 → p ≈ 0.73)
+3. **Q1 — Treatment effect** — Welch t-test on log10(conc) (raw-scale too,
+   so the reader sees both). Report t, df, p, group medians. Expect
+   |t| ≈ 0.06, p ≈ 0.96 raw / |t| ≈ 0.19, p ≈ 0.85 log — **a null**
+4. **Q2 — Two-way ANOVA** — `log10(conc) ~ treatment * peptide`; report the
+   F table. Expect all terms null (treatment p ≈ 0.81, peptide p ≈ 0.85,
+   interaction p ≈ 0.19)
+5. **Q3 — Missingness vs batch** — χ² on the 3×2 table. Expect χ² ≈ 2.76,
+   df = 2, p ≈ 0.25 — no machine effect
+6. **Q4 — Power simulation** — using Q1's design (n ≈ 53/group, lognormal
+   σ = 0.6): what's the empirical power to detect a +50% effect at your n?
+   Seed it. (≈ 0.84 at n = 50 — interpret your Q1 null *with this number*)
+7. **Figures** — ≥ 3: raw + log histograms, boxplot by treatment (both
+   groups), interaction plot (treatment × peptide means). Day 3 pre-flight
+   applies to every one
+8. **Conclusion** — 5 sentences max: what's null, what the power number
+   does to that claim, what you'd do next (more n? which factor?)
+9. **Receipt** — `sessionInfo()` / `pd.show_versions()`, run date, data
+   checksum
+
+**Starters**: `projects/p2/starter.R` · `starter.py` · `report-starter.qmd`.
+**Reference**: `projects/p2/solution.R` · `solution.py` · `report-solution.qmd`.
+
+**Bonus**: each `sample_id` has 3 replicate wells. Average per sample first
+(pseudoreplication!) and re-run Q1 — the answer shouldn't flip, but n drops
+from 107 wells to 66 samples. Which analysis would you pre-register?
+:::
+
+## Drills (live pad)
+
+Predict before running — statistical outputs included.
+
+```{webr}
+#| label: drills
+set.seed(1)
+x <- rnorm(1000)
+
+# 1. mean(x); sd(x) — close to 0 and 1?
+
+# 2. pnorm(0) — and why is it exactly 0.5?
+
+# 3. qnorm(0.5)?
+
+# 4. sum(x > 2) / 1000 — roughly what tail probability? Compare pnorm(-2).
+
+# 5. t.test(x, rnorm(1000, mean = 0.5))$p.value — significant?
+
+# 6. shapiro.test(x)$p.value — evidence against normal?
+
+# 7. chisq.test(table(c(rep("A", 10), rep("B", 10)), c(rep("x", 15), rep("y", 5))))$p.value —
+#    does the pairing matter here? (think: what's the table?)
+
+# 8. set.seed(2) twice in a row before rnorm(2) — same numbers?
+
+# 9. cor(1:10, 1:10) and cor(1:10, 10:1)?
+
+# 10. log10(c(1, 10, 100)) — and why log10 for reports, log for math?
+```
+
+::: {.callout-tip collapse="true"}
+## Expected answers
+1. ~0.00, ~1.00 — n = 1000 is enough for both to be boring
+2. 0.5 — the normal is symmetric around 0
+3. 0 — the median of the standard normal
+4. ~0.023 vs pnorm(-2) = 0.0228 — sampling noise, that's all
+5. Yes, p ≈ 1e-10 — a 0.5 SD shift with n = 1000 is enormous
+6. ~0.5-ish, definitely > 0.05 — it IS normal data
+7. The call builds a 2×2 table of the *paired* vectors — 10 in (A,x), 5 in
+   (B,x), 5 in (A,y), 0... plus recycling. The point: `table(a, b)` pairs
+   positionally. Know what table you're testing!
+8. Yes — identical. Resetting the seed resets the stream
+9. 1 and −1 — perfect monotone → perfect ± correlation
+10. 0, 1, 2 — log10 turns fold-changes into distances; natural log is for
+    math (derivatives); report readers think in 10s
+:::
+
+## Python drills (live pad)
+
+```{pyodide}
+#| label: drills-py
+import numpy as np
+from scipy import stats as st
+
+rng = np.random.default_rng(1)
+x = rng.normal(size=1000)
+
+# 1. x.mean(), x.std() — close to 0 and 1? (which ddof does .std() use?)
+
+# 2. st.norm.cdf(0)
+
+# 3. st.norm.ppf(0.5)
+
+# 4. (x > 2).mean() vs st.norm.cdf(-2)
+
+# 5. st.ttest_ind(x, rng.normal(0.5, 1, 1000), equal_var=False).pvalue
+
+# 6. st.shapiro(x).pvalue
+
+# 7. rng2 = np.random.default_rng(1); (rng2.normal(size=3) == x[:3]).all()
+#    — why does this reproduce while x keeps drifting?
+
+# 8. np.corrcoef([1..10], reversed)? — build with np.arange
+
+# 9. st.pearsonr(x[:10], x[:10])[0] — and what does [1] give you?
+
+# 10. np.log10([1, 10, 100])
+```
+
+::: {.callout-tip collapse="true"}
+## Expected answers (Python)
+1. ~0.00, ~1.00 — `.std()` uses ddof=1 like R's `sd()`; `np.std(x)` defaults
+   ddof=0! Know which one you're holding
+2. 0.5
+3. 0.0
+4. ~0.023 vs 0.0228
+5. ≈ 1e-10 — same as R drill 5 (different draws, same conclusion)
+6. > 0.05 — normal data passes
+7. rng2 is a NEW generator from the same seed; x's rng already consumed draws —
+   generators are streams, seeds are tap markers
+8. `np.corrcoef(np.arange(1, 11), np.arange(10, 0, -1))[0, 1]` → −1
+   (note the [0, 1] — corrcoef returns a matrix)
+9. 1.0 and the p-value — pearsonr is (r, p), opposite story ordering from
+   cor.test's list
+10. array([0., 1., 2.])
+:::
+
+## Exercises
+
+### Exercise 1 — the assumptions checklist, mechanically
+
+Given two seeded groups below: (a) Shapiro each, (b) Welch test raw,
+(c) Welch test log10, (d) one sentence: which scale would you report, and
+why?
+
+```{webr}
+#| exercise: ex-d5-assumptions
+set.seed(20)
+g1 <- rlnorm(40, log(20), 0.8)
+g2 <- rlnorm(40, log(20), 0.8)
+
+______
+```
+
+::: {.hint exercise="ex-d5-assumptions"}
+`shapiro.test(g1)$p.value` (raw fails, log passes), then
+`t.test(g1, g2)` and `t.test(log10(g1), log10(g2))`.
+:::
+
+::: {.solution exercise="ex-d5-assumptions"}
+```r
+shapiro.test(g1)$p.value              # ~4e-5 — raw is NOT normal (skew)
+shapiro.test(log10(g1))$p.value       # ~0.7 — log fixes it
+t.test(g1, g2)$p.value                # ~0.8 — null either way here
+t.test(log10(g1), log10(g2))$p.value  # ~0.4
+# Report the log scale: raw-scale tests on lognormal data are testing a
+# fiction; log10 also makes fold-differences additive.
+```
+:::
+
+```{pyodide}
+#| exercise: ex-d5-assumptions-py
+import numpy as np
+from scipy import stats as st
+
+rng = np.random.default_rng(20)
+g1 = rng.lognormal(np.log(20), 0.8, 40)
+g2 = rng.lognormal(np.log(20), 0.8, 40)
+
+______
+```
+
+::: {.hint exercise="ex-d5-assumptions-py"}
+`st.shapiro(np.log10(g1)).pvalue`, `st.ttest_ind(g1, g2, equal_var=False)`.
+:::
+
+::: {.solution exercise="ex-d5-assumptions-py"}
+```python
+print(st.shapiro(g1).pvalue, st.shapiro(np.log10(g1)).pvalue)
+print(st.ttest_ind(g1, g2, equal_var=False).pvalue)
+print(st.ttest_ind(np.log10(g1), np.log10(g2), equal_var=False).pvalue)
+```
+:::
+
+### Exercise 2 — build the coefficient table by hand
+
+Fit `od ~ hour` on the growth data and produce a broom-style table in
+Python (params/bse/tvalues/pvalues in one DataFrame):
+
+```{pyodide}
+#| exercise: ex-d5-table-py
+import pandas as pd
+from statsmodels.formula.api import ols
+
+od = pd.DataFrame({"hour": range(5),
+                   "od": [0.05, 0.12, 0.30, 0.72, 1.40]})
+
+______
+```
+
+::: {.hint exercise="ex-d5-table-py"}
+`fit.params`, `fit.bse`, `fit.tvalues`, `fit.pvalues` are all aligned
+Series — pass them to `pd.DataFrame({...})` together.
+:::
+
+::: {.solution exercise="ex-d5-table-py"}
+```python
+fit = ols("od ~ hour", data=od).fit()
+pd.DataFrame({"estimate": fit.params, "std.error": fit.bse,
+              "statistic": fit.tvalues, "p.value": fit.pvalues})
+```
+:::
+
+### Exercise 3 — the χ² that shouldn't be trusted
+
+Expected counts below 5 make χ² unreliable. Detect it before scipy/R does
+its thing, then fix it by pooling rare categories:
+
+```{webr}
+#| exercise: ex-d5-chisq
+tab <- matrix(c(50, 2, 8, 40), nrow = 2, byrow = TRUE,
+              dimnames = list(batch = c("B1", "B2"), qc = c("pass", "fail")))
+chisq.test(tab)     # read the warning!
+
+# fix: R's answer for small samples —
+______   # run the exact test instead
+```
+
+::: {.hint exercise="ex-d5-chisq"}
+`chisq.test(tab, simulate.p.value = TRUE)` — or `fisher.test(tab)`.
+:::
+
+::: {.solution exercise="ex-d5-chisq"}
+```r
+chisq.test(tab)                       # "Chi-squared approximation may be
+                                      #  incorrect" — expected counts < 5
+fisher.test(tab)$p.value              # exact — always valid on 2x2
+```
+:::
+
+### Exercise 4 — power curve
+
+Extend the power simulation: for n in c(10, 20, 50, 100), estimate the power
+to detect the +50% effect (seeded!). Report the smallest n reaching 80%.
+
+```{pyodide}
+#| exercise: ex-d5-power-py
+import numpy as np
+from scipy import stats as st
+
+rng = np.random.default_rng(42)
+
+def power(n, sims=300):
+    ______
+
+for n in [10, 20, 50, 100]:
+    print(n, round(power(n), 2))
+```
+
+::: {.hint exercise="ex-d5-power-py"}
+Inside `power`: run `sims` Welch tests of
+`rng.lognormal(log(25)+0.4, 0.6, n)` vs `rng.lognormal(log(25), 0.6, n)`;
+return the fraction of p < 0.05.
+:::
+
+::: {.solution exercise="ex-d5-power-py"}
+```python
+def power(n, sims=300):
+    hits = 0
+    for _ in range(sims):
+        p = st.ttest_ind(rng.lognormal(np.log(25) + 0.4, 0.6, n),
+                         rng.lognormal(np.log(25), 0.6, n),
+                         equal_var=False).pvalue
+        hits += p < 0.05
+    return hits / sims
+# n=10 ~0.24 · n=20 ~0.46 · n=50 ~0.84 · n=100 ~0.99 → 80% needs ~45/group
+```
+:::
+
+### Exercise 5 — refactor the AI statistics call
+
+This AI-generated call has three bugs (hint: one is a default, one is a
+scale, one is a claim). Find them, then fix:
+
+```{webr}
+#| exercise: ex-d5-refactor
+# ❌ AI-smell:
+set.seed(7)
+ctrl <- rlnorm(30, log(25), 0.6)
+trt  <- rlnorm(30, log(25), 0.6)
+t.test(ctrl, trt, var.equal = TRUE)$p.value
+# "p > 0.05 proves the groups are identical"
+```
+
+::: {.hint exercise="ex-d5-refactor"}
+1. `var.equal = TRUE` overrides R's safer Welch default with no justification;
+2. lognormal data → test on log scale;
+3. "p > 0.05 proves identical" is the null-result fallacy — absence of
+   evidence isn't evidence of absence (Day's power section!).
+:::
+
+::: {.solution exercise="ex-d5-refactor"}
+```r
+set.seed(7)
+ctrl <- rlnorm(30, log(25), 0.6)
+trt  <- rlnorm(30, log(25), 0.6)
+t.test(log(ctrl), log(trt))$p.value   # Welch, log scale
+# Correct claim: "no detectable difference at n = 30 — and a power check
+# (Day 5) shows this design detects only ~66% of true +50% effects."
+```
+:::
+
+## Common pitfalls (real ones)
+
+::: {.callout-warning}
+## 1. Testing on the wrong scale
+t-tests on lognormal concentration data "work" (they run, they return
+numbers) while answering a question about means-of-skewed-noise instead of
+the effect you care about. Shapiro isn't bureaucracy — it's the map from
+your data to the test's assumptions.
+:::
+
+::: {.callout-warning}
+## 2. scipy defaults ≠ R defaults
+`equal_var` (Student vs Welch), Yates correction in `chi2_contingency`,
+`ddof` in `np.std` vs `sd()` — every one silently changes the number in
+your report. When R and Python disagree on a p-value, check defaults
+*before* checking math.
+:::
+
+::: {.callout-warning}
+## 3. p > 0.05 = "no difference"
+A null p-value means "not detected", never "proved absent". The honest
+sentence needs the power estimate next to it — which is why Q4 is in
+Project 2 and not a bonus.
+:::
+
+## Self-quiz — predict the output
+
+```{webr}
+#| label: quiz
+set.seed(5)
+a <- rnorm(100); b <- rnorm(100, mean = 2)
+
+# Q1: roughly what t and p?
+t.test(a, b)$statistic
+
+# Q2
+pnorm(1.96) - pnorm(-1.96)
+
+# Q3
+mean(replicate(100, t.test(rnorm(10), rnorm(10))$p.value < 0.05))
+
+# Q4
+cor.test(1:50, 1:50)$p.value
+
+# Q5 — what's wrong with this workflow?
+x <- rlnorm(100); shapiro.test(x); t.test(x, rnorm(100))
+```
+
+::: {.callout-tip collapse="true"}
+## Quiz answers
+1. t ≈ −14 (b is 2 SDs up, n = 100); p ~ 1e-25. Distance, not precision
+2. 0.95 — the 95% window; qnorm(0.975) is its right edge
+3. ~0.05 — two identical distributions reject 5% of the time: the false
+   positive rate, by construction
+4. 0 (numerically ~0) — perfect correlation, n = 50; the t-statistic is huge
+5. Shapiro runs, prints, and is then **thrown away** — nothing conditions
+   the test on the check. The workflow is theater: either branch on the
+   result (log-transform) or say why you didn't
+:::
+
+## Wrap-up checklist
+
+- [ ] Seeds in both dialects — and why `default_rng` beats `np.random.seed`
+- [ ] d/p/q/r ↔ pdf/cdf/ppf/rvs, and Shapiro before every parametric test
+- [ ] Welch by default in R; `equal_var=False` in scipy — always
+- [ ] Formula interface: `y ~ f1 * f2` in `lm`/`aov` and `ols`/`logit`
+- [ ] `broom::tidy` ↔ params/bse/pvalues DataFrame ritual
+- [ ] I can run a power simulation in 10 lines and cite it in a conclusion
+- [ ] I know the 4-line receipt: seed, versions, date, checksum
+
+**Project 2 is due before Week 3 Day 1.** Next week: Python classes & OOP —
+the `__init__` you've been avoiding, plus R's S3 in 30 minutes.

@@ -1,0 +1,663 @@
+---
+title: "Day 4 — Algorithm Gym #2: Two Pointers, Sliding Windows, Prefix Sums"
+subtitle: "Week 2 · array patterns that turn O(n²) scans into O(n) walks — with DNA flavor"
+---
+
+::: {.callout-note}
+## How Gym days work
+1. Learn **three patterns** (today: two pointers, sliding window, prefix sums)
+2. Solve problems with the **4-step method** (Gym #1: restate → brute force →
+   name the bottleneck → reach for the trick)
+3. Every problem solved **twice** — R and Python — because idiom-building is the point
+
+All three patterns today share one idea: **never re-scan what you can update.**
+Struggle 10–15 minutes before peeking.
+:::
+
+## The patterns at a glance
+
+| Pattern | Shape | Beats | Bio application |
+|---|---|---|---|
+| Two pointers | walk both ends inward | nested pair loops O(n²) → O(n) | reverse complement, pair-sum |
+| Sliding window (fixed) | update a running sum per step | re-summing every window O(nk) → O(n) | GC content per k-window |
+| Sliding window (variable) | grow right, shrink left | "longest run with property" | quality-masked stretches |
+| Prefix sums | precompute cumulative array | range queries O(n) → O(1) | per-base coverage depth |
+
+## Pattern 1 — Two pointers: converge from the ends
+
+> **Problem 1 — Reverse complement.** Given a DNA string, return its reverse
+> complement (A↔T, G↔C, reversed). *The* bioinformatics two-pointer problem:
+> swap complementary bases moving inward, stop at the middle.
+
+Brute force: reverse the string, then map each base — two passes and a copy.
+Two pointers: **one pass, half the comparisons, no intermediate copy**:
+
+```{webr}
+#| label: revcomp-r
+revcomp <- function(dna) {
+  comp <- c(A = "T", T = "A", G = "C", C = "G")
+  chars <- strsplit(toupper(dna), "")[[1]]
+  i <- 1
+  j <- length(chars)
+  while (i < j) {
+    ci <- comp[[chars[i]]]          # complement of left base
+    chars[i] <- comp[[chars[j]]]    # becomes complement of right base
+    chars[j] <- ci
+    i <- i + 1
+    j <- j - 1
+  }
+  if (i == j) chars[i] <- comp[[chars[i]]]   # odd length: middle base too
+  paste(chars, collapse = "")
+}
+
+revcomp("AGTC")   # "GACT" — complement AGTC is TCAG, reversed: GACT
+```
+
+```{pyodide}
+#| label: revcomp-py
+def revcomp(dna):
+    comp = {"A": "T", "T": "A", "G": "C", "C": "G"}
+    chars = list(dna.upper())
+    i, j = 0, len(chars) - 1          # ← the 0-based twin of R's 1 and length()
+    while i < j:
+        chars[i], chars[j] = comp[chars[j]], comp[chars[i]]
+        i += 1
+        j -= 1
+    if i == j:                     # odd length: middle base too
+        chars[i] = comp[chars[i]]
+    return "".join(chars)
+
+print(revcomp("AGTC"))   # GACT
+```
+
+Notice the **R/Python index translation** in the wild: R starts at `1` and
+`length(chars)`; Python at `0` and `len(chars) - 1`. The loop condition is
+the same in both (`i < j`) — write the invariant, the indices follow.
+
+> **Problem 2 — Two-sum on a sorted array.** Given a *sorted* array and
+> target, return the pair that sums to target. Gym #1 needed a hash map for
+> this; **sorted order unlocks the cheaper trick** — too small? advance the
+> left pointer (bigger values); too big? retreat the right (smaller values):
+
+```{webr}
+#| label: twosum-sorted-r
+two_sum_sorted <- function(nums, target) {
+  i <- 1
+  j <- length(nums)
+  while (i < j) {
+    s <- nums[i] + nums[j]
+    if (s == target) return(c(nums[i], nums[j]))
+    if (s < target) i <- i + 1 else j <- j - 1
+  }
+  NULL
+}
+
+two_sum_sorted(c(2, 7, 11, 15), 9)   # 2 7
+```
+
+```{pyodide}
+#| label: twosum-sorted-py
+def two_sum_sorted(nums, target):
+    i, j = 0, len(nums) - 1
+    while i < j:
+        s = nums[i] + nums[j]
+        if s == target:
+            return [nums[i], nums[j]]
+        if s < target:
+            i += 1
+        else:
+            j -= 1
+    return None
+
+print(two_sum_sorted([2, 7, 11, 15], 9))   # [2, 7]
+```
+
+One walk, O(n) time, **O(1) space** — the hash-map version paid O(n) space.
+The 4-step sentence: *"sorted order means moving a pointer can't skip the
+answer — the pair that's too small needs a bigger partner (i++), the pair
+that's too big needs a smaller one (j−−)."*
+
+## Pattern 2 — Sliding windows: update, don't re-compute
+
+> **Problem 3 — Highest-GC window.** Given a DNA string and window size `k`,
+> find the window (first one, in case of ties) with the most G/C bases. This
+> is the genome-browser "GC content per window" scan.
+
+Brute force: for each window, count GC in it — O(n·k). The window *slides by
+one* between neighbors, so only **one base leaves and one base enters**:
+
+```{webr}
+#| label: gcwindow-r
+best_gc_window <- function(dna, k) {
+  chars <- strsplit(toupper(dna), "")[[1]]
+  is_gc <- as.integer(chars %in% c("G", "C"))     # vectorize the counting
+
+  count <- sum(is_gc[1:k])                        # first window
+  best <- count
+  best_start <- 1
+  for (i in 2:(length(chars) - k + 1)) {
+    count <- count - is_gc[i - 1] + is_gc[i + k - 1]   # ← the whole trick
+    if (count > best) {
+      best <- count
+      best_start <- i
+    }
+  }
+  list(start = best_start, gc = best)
+}
+
+best_gc_window("ATGCCCGGTA", 4)   # start 3: window "GCCC" — 4 GC of 4
+```
+
+```{pyodide}
+#| label: gcwindow-py
+def best_gc_window(dna, k):
+    is_gc = [1 if b in "GC" else 0 for b in dna.upper()]
+    count = sum(is_gc[:k])
+    best, best_start = count, 0
+    for i in range(1, len(is_gc) - k + 1):
+        count += is_gc[i + k - 1] - is_gc[i - 1]   # enter right, leave left
+        if count > best:
+            best, best_start = count, i
+    return {"start": best_start, "gc": best}
+
+print(best_gc_window("ATGCCCGGTA", 4))   # {'start': 2, 'gc': 4} — "GCCC"
+```
+
+O(n) regardless of `k`. The bookkeeping cost: **one index leaves, one
+enters, and the edge arithmetic is 1-based in R and 0-based in Python** —
+`is_gc[i - 1] + is_gc[i + k - 1]` vs `is_gc[i - 1]`... identical expressions,
+different meanings of `i`. Test on a tiny string before trusting the edges.
+
+> **Problem 4 — Longest run with a property (variable window).** Classic:
+> longest substring **without repeating characters**. Bio variant in the
+> exercises: longest clean stretch with at most one low-quality base.
+> Shape: **grow right every step; shrink left only when the property breaks**:
+
+```{webr}
+#| label: varwindow-r
+longest_unique <- function(s) {
+  chars <- strsplit(s, "")[[1]]
+  seen <- list()                       # char -> last position (1-based)
+  left <- 1
+  best <- 0
+  for (right in seq_along(chars)) {
+    ch <- chars[right]
+    if (!is.null(seen[[ch]]) && seen[[ch]] >= left) {
+      left <- seen[[ch]] + 1           # jump left past the previous copy
+    }
+    seen[[ch]] <- right
+    best <- max(best, right - left + 1)
+  }
+  best
+}
+
+longest_unique("abcabcbb")   # 3 — "abc"
+longest_unique("bbbbb")      # 1
+```
+
+```{pyodide}
+#| label: varwindow-py
+def longest_unique(s):
+    seen = {}                          # char -> last index (0-based)
+    left = 0
+    best = 0
+    for right, ch in enumerate(s):
+        if ch in seen and seen[ch] >= left:
+            left = seen[ch] + 1        # jump past the previous copy
+        seen[ch] = right
+        best = max(best, right - left + 1)
+    return best
+
+print(longest_unique("abcabcbb"))   # 3
+print(longest_unique("bbbbb"))      # 1
+```
+
+The pointer logic is *character-identical* across languages — this is the
+pattern to internalize at the algorithm level: `right` advances n times,
+`left` only moves forward, so the while-work totals O(n) **amortized**.
+
+## Pattern 3 — Prefix sums: pay once, query free
+
+> **Problem 5 — Coverage depth.** Reads are intervals [start, end]; per-base
+> coverage = how many reads cover each position. Every coverage plot you've
+> ever made is this computation. Brute force: increment every base of every
+> read — O(n·L). The pro move: a **difference array** (add +1 at start,
+> −1 after end) then one **prefix sum** pass:
+
+```{webr}
+#| label: coverage-r
+coverage <- function(read_starts, read_ends, genome_len) {
+  delta <- integer(genome_len + 1)
+  for (s in read_starts) delta[s] <- delta[s] + 1          # +1 where coverage begins
+  for (e in read_ends)   delta[e + 1] <- delta[e + 1] - 1  # −1 where it ends
+  cumsum(delta)[1:genome_len]                              # prefix sum = depth
+}
+
+coverage(c(1, 2, 5), c(3, 4, 7), 8)   # 1 2 2 1 1 1 1 0
+```
+
+```{pyodide}
+#| label: coverage-py
+import numpy as np
+
+def coverage(starts, ends, genome_len):
+    delta = np.zeros(genome_len + 1, dtype=int)
+    np.add.at(delta, starts, 1)          # +1 where coverage begins
+    np.add.at(delta, np.asarray(ends) + 1, -1)   # −1 one past where it ends
+    return np.cumsum(delta)[:genome_len]         # prefix sum = depth
+
+print(coverage([0, 1, 4], [2, 3, 6], 8))   # [1 2 2 1 1 1 1 0]
+```
+
+Two lines of math replace nested loops; `pysam`'s `pileup` (Week 4) is this
+idea with production engineering. Generalized: build the cumulative array
+**once** — `cumsum(x)` ↔ `np.cumsum` — and any range sum becomes two
+lookups: `sum(x[l:r])` O(n) becomes `cum[r] - cum[l-1]` O(1).
+
+## Drills (live pad)
+
+Predict, then run. All index math — write your prediction *with* indices.
+
+```{webr}
+#| label: drills
+x <- c(1, 5, 2, 8, 3)
+
+# 1. cumsum(x) — what is position 3?
+
+# 2. Using cumsum only: sum of x[2:4]? (two lookups)
+
+# 3. Walk the two-sum-sorted pointers by hand on c(1, 3, 5, 9), target 8 —
+#    which pairs get tested, in order?
+
+# 4. best_gc_window("GGCCAA", 2) — predict start and gc
+
+# 5. longest_unique("pwwkew") — and what is the longest substring?
+
+# 6. revcomp("A") and revcomp("GAATTC") — predict both (hint: EcoRI site)
+
+# 7. Two pointers on c(5, 2, 9, 1): why does the pattern BREAK on unsorted
+#    input? (run two_sum_sorted(c(5, 2, 9, 1), 7) and explain — the real
+#    pair 5+2=7 exists. What comes back?)
+
+# 8. diff(c(3, 1, 4)) — what relationship does diff() have to cumsum()?
+
+# 9. sum(is_gc) where is_gc <- as.integer(strsplit("GATTACA","")[[1]] %in%
+#    c("G","C")) — predict before running
+
+# 10. coverage(c(1,1,1), c(1,1,1), 3) — a read of length... what? Predict.
+```
+
+::: {.callout-tip collapse="true"}
+## Expected answers
+1. `1 6 8 16 19` — cumsum[3] = 8
+2. `cumsum(x)[4] - cumsum(x)[1]` = 16 − 1 = 15
+3. (1,9)→10 too big → j−−; (1,5)→6 too small → i++; (3,5)→8 ✓. Tests:
+   (1,9), (1,5), (3,5)
+4. start 1, gc 2 ("GG")
+5. 3 — "wke"
+6. `"T"` (a lone base still complements) and `"GAATTC"` — unchanged!
+   Complement CTTAAG, reversed CTTAAG... it maps to itself. That's what
+   "palindromic" means for restriction sites: revcomp(s) == s.
+7. Returns NULL and misses 5+2=7! Unsorted input breaks the invariant
+   ("moving j decreases the sum") — the walk hops over the answer. Sort first.
+8. `diff(cumsum(x))` recovers x — they're inverse operations
+9. 2 (G and C — G, C)
+10. `3 0 0` — three length-1 reads stacked on base 1 give depth 3 there.
+    `coverage(c(1), c(1), 3)` would be `1 0 0`: a [1,1] read covers ONE base.
+    Off-by-ones live exactly here — decide closed vs half-open per project.
+:::
+
+## Python drills (live pad)
+
+```{pyodide}
+#| label: drills-py
+import numpy as np
+x = np.array([1, 5, 2, 8, 3])
+
+# 1. np.cumsum(x) — position 2 (0-based)?
+
+# 2. Sum of x[1:4] using cumsum only (mind the 0/1-based translation!)
+
+# 3. revcomp("ATGC") by hand-walking the pointers — then run it
+
+# 4. best_gc_window("GGCCAA", 2) — same answer as the R drill? Why the
+#    different "start" number?
+
+# 5. longest_unique("dvdf") — the tricky case where left must JUMP not
+#    creep. Trace it.
+
+# 6. np.add.at(delta, [0, 0, 0], 1) on zeros(4) — why not delta[[0,0,0]] += 1?
+
+# 7. coverage([0], [0], 4) — predict. Is a [0,0] read one base or none?
+
+# 8. Two-sum sorted on [2, 3, 4, 9], target 9 — which pairs tested?
+```
+
+::: {.callout-tip collapse="true"}
+## Expected answers (Python)
+1. `1 6 8 16 19` — cumsum[2] = 8 (same number, different label)
+2. `cs[3] - cs[0]` = 16 − 1 = 15 — R's `x[2:4]` is Python's `x[1:4]`
+3. GCAT
+4. `{'start': 0, 'gc': 2}` — same window as R ("GG"), 0-based start (R said 1)
+5. 3 — "vdf". When the repeat `d` is *before* left, you must NOT move left
+   back — that's the `seen[ch] >= left` guard
+6. `delta[[0,0,0]] += 1` adds 1 **once** (fancy indexing copies); `np.add.at`
+   accumulates every hit — the coverage killer-bug
+7. `[1, 0, 0, 0]` — one base. Same convention question as drill 10; decide it
+   once per project and write it down
+8. (2,9)=11 → j−−; (2,4)=6 → i++; (3,4)=7 → i++; pointers meet → None.
+   No pair sums to 9 — sorted walk proves it in 3 tests.
+:::
+
+## Exercises
+
+### Exercise 1 — valid palindrome, two pointers
+
+A sequence reads the same forwards and backwards after ignoring case and
+non-letters. O(1) extra space — no cleaned copy, pointers skip junk:
+
+```{webr}
+#| exercise: ex-d4-palindrome
+is_palindrome <- function(s) {
+  chars <- tolower(strsplit(s, "")[[1]])
+  i <- 1
+  j <- length(chars)
+  while (i < j) {
+    # advance i past non-letters, retreat j past non-letters, then compare
+    ______
+  }
+  TRUE
+}
+
+is_palindrome("A man, a plan, a canal: Panama")   # TRUE
+is_palindrome("race a car")                        # FALSE
+```
+
+::: {.hint exercise="ex-d4-palindrome"}
+Inside the loop: `while (i < j && !grepl("[a-z]", chars[i])) i <- i + 1`
+(and the mirror for j), then `if (chars[i] != chars[j]) return(FALSE)`,
+finally `i <- i + 1; j <- j - 1`.
+:::
+
+::: {.solution exercise="ex-d4-palindrome"}
+```r
+is_palindrome <- function(s) {
+  chars <- tolower(strsplit(s, "")[[1]])
+  is_al <- function(ch) grepl("[a-z]", ch)
+  i <- 1; j <- length(chars)
+  while (i < j) {
+    while (i < j && !is_al(chars[i])) i <- i + 1
+    while (i < j && !is_al(chars[j])) j <- j - 1
+    if (chars[i] != chars[j]) return(FALSE)
+    i <- i + 1; j <- j - 1
+  }
+  TRUE
+}
+```
+:::
+
+### Exercise 2 — same, Python
+
+```{pyodide}
+#| exercise: ex-d4-palindrome-py
+def is_palindrome(s):
+    ______
+
+print(is_palindrome("A man, a plan, a canal: Panama"))   # True
+print(is_palindrome("race a car"))                        # False
+```
+
+::: {.hint exercise="ex-d4-palindrome-py"}
+`ch.isalnum()` is the letter/digit test — skip non-alnum with inner whiles,
+compare lowercased.
+:::
+
+::: {.solution exercise="ex-d4-palindrome-py"}
+```python
+def is_palindrome(s):
+    chars = s.lower()
+    i, j = 0, len(chars) - 1
+    while i < j:
+        while i < j and not chars[i].isalnum():
+            i += 1
+        while i < j and not chars[j].isalnum():
+            j -= 1
+        if chars[i] != chars[j]:
+            return False
+        i += 1
+        j -= 1
+    return True
+```
+:::
+
+### Exercise 3 — two-sum sorted, return the positions (Python)
+
+Return 0-based positions, not values:
+
+```{pyodide}
+#| exercise: ex-d4-twosum-pos-py
+def two_sum_sorted_pos(nums, target):
+    ______
+
+print(two_sum_sorted_pos([2, 7, 11, 15], 9))   # [0, 1]
+```
+
+::: {.hint exercise="ex-d4-twosum-pos-py"}
+Same walk; return `[i, j]` when the sum hits.
+:::
+
+::: {.solution exercise="ex-d4-twosum-pos-py"}
+```python
+def two_sum_sorted_pos(nums, target):
+    i, j = 0, len(nums) - 1
+    while i < j:
+        s = nums[i] + nums[j]
+        if s == target:
+            return [i, j]
+        if s < target:
+            i += 1
+        else:
+            j -= 1
+    return None
+```
+:::
+
+### Exercise 4 — longest clean stretch (variable window, bio flavor)
+
+Quality strings: each base has a phred score; a base is *clean* if its
+score ≥ 20. Return the length of the longest stretch with **at most one**
+unclean base. Grow right, shrink left when unclean-count exceeds 1:
+
+```{webr}
+#| exercise: ex-d4-qwindow
+longest_clean <- function(quals) {
+  scores <- as.integer(charToRaw(quals)) - 33L    # phred+33 -> integer
+  clean <- scores >= 20
+  left <- 1
+  bad <- 0
+  best <- 0
+  for (right in seq_along(clean)) {
+    ______
+  }
+  best
+}
+
+longest_clean("II#II5F#II")   # 7 — two bad bases ('#' at 3 and 8);
+                              # best stretch spans one of them
+```
+
+::: {.hint exercise="ex-d4-qwindow"}
+`if (!clean[right]) bad <- bad + 1`; `while (bad > 1) { if (!clean[left])
+bad <- bad - 1; left <- left + 1 }`; then
+`best <- max(best, right - left + 1)`.
+:::
+
+::: {.solution exercise="ex-d4-qwindow"}
+```r
+longest_clean <- function(quals) {
+  scores <- as.integer(charToRaw(quals)) - 33L
+  clean <- scores >= 20
+  left <- 1; bad <- 0; best <- 0
+  for (right in seq_along(clean)) {
+    if (!clean[right]) bad <- bad + 1
+    while (bad > 1) {
+      if (!clean[left]) bad <- bad - 1
+      left <- left + 1
+    }
+    best <- max(best, right - left + 1)
+  }
+  best
+}
+# '5' is phred 20 -> clean at the >= 20 threshold; the '#'s (phred 2) are
+# the two bad bases. Longest tolerated run: 7 bases.
+```
+:::
+
+### Exercise 5 — coverage queries (prefix sums)
+
+You built coverage once. Now answer "how many reads cover bases 20–50?"
+in O(1) — build a **cumulative coverage array** and take differences:
+
+```{pyodide}
+#| exercise: ex-d4-covquery-py
+import numpy as np
+
+reads = [(0, 30), (10, 60), (25, 45)]   # [start, end) half-open, like BED
+
+def coverage_array(reads, genome_len):
+    ______   # hint: difference array + np.cumsum, returns length genome_len
+
+cov = coverage_array(reads, 100)
+print(cov[20:51].min(), cov[20:51].max())   # 1 3 — every base in 20..50 covered
+
+# queries are now O(1): reads covering base p = cov[p]
+print(cov[25], cov[50], cov[70])            # 3 1 0
+```
+
+::: {.hint exercise="ex-d4-covquery-py"}
+Half-open `[s, e)`: `delta[s] += 1; delta[e] -= 1`, then
+`np.cumsum(delta)`.
+:::
+
+::: {.solution exercise="ex-d4-covquery-py"}
+```python
+def coverage_array(reads, genome_len):
+    delta = np.zeros(genome_len + 1, dtype=int)
+    for s, e in reads:
+        delta[s] += 1
+        delta[e] -= 1        # e is EXCLUSIVE — subtract exactly at e
+    return np.cumsum(delta)[:genome_len]
+# cov[25]=3 (all three reads overlap base 25), cov[50]=1 (only read 2:
+# half-open [10,60) still covers 50), cov[70]=0 (even read 2 is gone)
+# half-open is why BED/GTF/gtf all use it: end - start = length, no off-by-one
+```
+:::
+
+### Exercise 6 — same composition? (Counter/String problems)
+
+Two k-mers are *composition-equivalent* if one is a rearrangement of the
+other (same multiset of bases). Return TRUE/FALSE. R:
+
+```{webr}
+#| exercise: ex-d4-anagram
+same_composition <- function(k1, k2) {
+  ______
+}
+
+same_composition("ACGT", "TCGA")   # TRUE
+same_composition("ACGT", "ACGTT")  # FALSE
+```
+
+::: {.hint exercise="ex-d4-anagram"}
+`table(strsplit(tolower(k1), "")[[1]])` — compare the two tables with
+`identical(...)` after sorting names (table() drops zero-count levels
+differently otherwise).
+:::
+
+::: {.solution exercise="ex-d4-anagram"}
+```r
+same_composition <- function(k1, k2) {
+  if (nchar(k1) != nchar(k2)) return(FALSE)
+  t1 <- sort(table(strsplit(tolower(k1), "")[[1]]))
+  t2 <- sort(table(strsplit(tolower(k2), "")[[1]]))
+  identical(t1, t2)   # sort() on a table sorts by NAMES; equal names+counts
+}
+# Python twin: Counter(k1.lower()) == Counter(k2.lower())
+```
+:::
+
+## Common pitfalls (real ones)
+
+::: {.callout-warning}
+## 1. Window edge off-by-ones
+The sliding update `count − leave + enter` needs **exactly** the base leaving
+(`i−1`-th) and entering (`i+k−1`-th in R). Every wrong-window bug I've seen
+in reviews was `i+k−2` or `i+k` — meaning the window crept half a base per
+step. Test on a string where the answer position is *unique and known*.
+:::
+
+::: {.callout-warning}
+## 2. `left` must never move backwards
+In variable windows, the jump `left = seen[ch] + 1` needs the
+`seen[ch] >= left` guard — otherwise a stale hit from before `left` drags it
+backwards and the window re-admits duplicates. ("dvdf", drill 5.)
+:::
+
+::: {.callout-warning}
+## 3. Half-open vs closed intervals — pick one, write it down
+Coverage, windows, ranges: `[start, end)` (BED/py) vs `[start, end]`
+(R/GRanges uses 1-based closed). Translating code between them is *mechanical
+only if the convention is explicit* — `delta[e] -= 1` vs `delta[e+1] -= 1`
+is the whole difference between correct coverage and coverage that ends one
+base early everywhere.
+:::
+
+::: {.callout-warning}
+## 4. The un-touched middle
+Two-pointer swaps that stop at `i < j` leave the middle element alone when
+`length` is odd — fine for palindrome *checks*, wrong for transformations
+like reverse complement (`revcomp("A")` must be `"T"`, not `"A"`). Even
+lengths hide the bug completely; test odd lengths **first**, not last.
+:::
+
+## Self-quiz — predict the output
+
+```{webr}
+#| label: quiz
+# Q1
+revcomp("AAAACCCC")
+
+# Q2 — window never shrinks: what's the bug's symptom in
+#      longest_unique? (trace "abba" mentally)
+# Hint: when right=4 ('a'), seen['a'] = 1 (0-based) and left is at 2.
+
+# Q3
+cumsum(c(2, 2, 2, 2))[3]
+
+# Q4 — two_sum_sorted(c(1, 2, 4, 4), 8)?
+
+# Q5 — how many iterations does best_gc_window("AAAA", 2) loop?
+```
+
+::: {.callout-tip collapse="true"}
+## Quiz answers
+1. `GGGGTTTT` — complement (A↔T, C↔G) then reverse = same as swap-in-place
+2. Without the `seen[ch] >= left` guard, left jumps BACK to 0+1... window
+   becomes "bba" (dup!) → wrong answer 3 instead of 2. The guard is load-bearing.
+3. 6
+4. c(4, 4) — i=1,j=4: 1+4=5 < 8 → i++; 2+4=6 < 8 → i++; 4+4=8 ✓
+5. 2 loop iterations after the initial window — there are n−k+1 = 3 windows,
+   the first is counted before the loop (R `i in 2:3`, Python `range(1, 3)`)
+:::
+
+## Wrap-up checklist
+
+- [ ] Two pointers: converging from ends, O(n) time O(1) space, needs sorted
+- [ ] Fixed window: add entering base, subtract leaving base — never re-sum
+- [ ] Variable window: grow right, shrink left only when property breaks
+- [ ] Prefix sums/difference arrays: build once, query O(1) — coverage is this
+- [ ] R is 1-based-closed, Python 0-based-half-open-in-idiom — edge math differs
+- [ ] I traced "dvdf" and "abba" by hand without running them
+
+**Tomorrow:** the statistical battery — distributions, t-tests, ANOVA, χ²,
+regression — plus Project 2: your first reproducible report.

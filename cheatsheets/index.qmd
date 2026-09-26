@@ -1,0 +1,88 @@
+---
+title: "Cheat Sheets"
+subtitle: "Every quick-reference table in the course, one page"
+---
+
+::: {.callout-note}
+## How to use this page
+
+Consolidated quick reference — skimmable before a session, printable for your
+desk. Each block links to the full lesson where the pattern is taught.
+New weeks append at the bottom.
+:::
+
+# Week 1 — Language core
+
+## The 7 Patterns of R ([Day 1](../w1/day1-patterns.qmd))
+
+| # | R pattern | Recognition cue | Python counterpart |
+|---|---|---|---|
+| 1 | Vectorization | "no loop, whole vector at once" | numpy / pandas vectorization |
+| 2 | The pipe `\|>` | "data first, then verbs" | method chaining |
+| 3 | df-in, df-out | "function eats data.frame, returns data.frame" | DataFrame functions |
+| 4 | Formula `y ~ x` | "tilde = model spec" | patsy `"mpg ~ am"` |
+| 5 | Tidy eval `{{ }}` | "column names as arguments" | — (kwargs) |
+| 6 | Functionals `map()` | "loop hidden in a function" | comprehensions |
+| 7 | S3 dispatch | "`plot(x)` varies by class" | dunders |
+
+## Indexing duel ([Day 2](../w1/day2-data-structures.qmd))
+
+| Task | R | Python |
+|---|---|---|
+| 1-D homogeneous | `vector` | numpy `array` |
+| key → value | named `list`/`vector` | `dict` |
+| table | `data.frame`/`tibble` | `DataFrame` |
+| first element | `x[1]` | `x[0]` |
+| slice 2–4 | `x[2:4]` (inclusive) | `x[1:4]` (exclusive) |
+| drop position 2 | `x[-2]` | `del x[1]` |
+| 2nd from end | `x[length(x)-1]` | `x[-2]` |
+| logical filter | `x[x > 3]` | `x[x > 3]` |
+| named pick | `x[["k"]]`, `x$k` | `d["k"]`, `obj.k` |
+| column names | `names(df)` | `df.columns` |
+
+**Missing values:** `NA` (typed missing) ↔ `np.nan`/`pd.NA` · `NULL` ↔ `None` ·
+R math spreads NA by default; pandas skips it by default.
+
+## Function essentials ([Day 3](../w1/day3-functions.qmd))
+
+| Task | R | Python |
+|---|---|---|
+| conditional value | `x <- if (a) 1 else 2` | `x = 1 if a else 2` |
+| vectorized branch | `if_else()` / `case_when()` | `np.where()` / `np.select()` |
+| dispatch | `switch(t, A=1, 99)` | `d.get(t, 99)` |
+| extra args | `f(...)` | `*args, **kwargs` |
+| guards | `stopifnot("msg" = cond)` | `raise ValueError("msg")` |
+| defaults | lazy — may reference other args | eager — beware `=[]` |
+
+## Algorithm Gym #1 — hash pattern ([Day 4](../w1/day4-gym1.qmd))
+
+| R tool | Python | Job |
+|---|---|---|
+| `match(x, t)` | `d[key]` | O(1)-ish lookup |
+| `%in%` | `in` | membership |
+| `anyDuplicated(x)` | `len(set(x)) < len(x)` | duplicate? |
+| `table(x)` | `Counter(x)` | counts (`["z"]` → NA vs 0!) |
+| named vector | `dict` | value→position maps |
+
+**The pattern:** restate → brute force → name bottleneck → "seen so far" map.
+
+## Text, factors, dates ([Day 5](../w1/day5-strings-project1.qmd))
+
+| Task | R | Python |
+|---|---|---|
+| trim / lower | `str_trim()`, `str_to_lower()` | `.strip()`, `.lower()` |
+| extract regex | `str_extract(x, "\\d+")` | `re.search(r"\d+", s)` |
+| parse dates | `ymd() mdy() dmy()`, `parse_date_time(orders=)` | `pd.to_datetime(format=...)` |
+| date parts | `year() wday(label=)` → "Thu" | `.year`, `.strftime("%A")` |
+| category | `factor(levels=)`, `fct_recode` | `astype("category")`, `.cat` |
+| **rule** | recode values → *then* factorize → count NAs | same |
+
+# Week 2 — *under construction (being built in parallel)*
+
+# Week 3+ — *coming soon*
+
+::: {.callout-tip}
+## Printing this page
+Browser print → Save as PDF. The print stylesheet hides navigation and
+code-toolbar chrome; tables break across pages cleanly.
+:::

@@ -1,0 +1,640 @@
+---
+title: "Day 2 — The Grammar of Wrangling"
+subtitle: "Week 2 · dplyr's 6 verbs ↔ the pandas method chain; row-wise ops; one obvious way"
+---
+
+## Cheat sheet (60 seconds)
+
+| dplyr verb | job | pandas idiom |
+|---|---|---|
+| `filter(df, cond)` | pick **rows** | `df.query("cond")` or `df[mask]` |
+| `select(df, a, b)` | pick **columns** | `df[["a", "b"]]` / `df.filter(items=...)` |
+| `arrange(df, desc(x))` | sort rows | `df.sort_values("x", ascending=False)` |
+| `mutate(df, z = a + b)` | new/changed **columns** | `df.assign(z=...)` |
+| `group_by(g) |> summarise(m = mean(x))` | split → apply → combine | `df.groupby("g")["x"].mean()` |
+| `pull(df, x)` | extract a bare vector | `df["x"]` (a Series) |
+| `count(df, g)` | tally | `df.value_counts("g")` |
+| `distinct(df)` | dedupe rows | `df.drop_duplicates()` |
+| `slice_max(df, x, n = 5)` | top-n rows | `df.nlargest(5, "x")` |
+| `rename(df, y = x)` | rename columns | `df.rename(columns={"x": "y"})` |
+| `across(a:b, mean)` | apply to many cols | `df[["a","b"]].agg("mean")` |
+| `rowwise() |> mutate(...)` | row-by-row | `df.apply(..., axis=1)` (last resort!) |
+
+## One grammar, two dialects
+
+dplyr's insight: data wrangling has a small **vocabulary of verbs**, and any
+analysis is a sentence — `starwars |> filter(height > 200) |> select(name,
+height) |> arrange(desc(height))`. pandas' insight: the DataFrame knows these
+moves as **methods**, so the same sentence is a method chain. Neither wants
+your `for` loop over rows. **The verb grammar transfers; only the syntax
+changes** — which is why we practice side-by-side.
+
+```{webr}
+#| label: sentence-r
+library(tidyverse)
+
+starwars |>
+  filter(species == "Human", height > 185) |>
+  select(name, height, mass) |>
+  arrange(desc(mass)) |>
+  mutate(bmi = mass / (height / 100)^2)
+```
+
+```{pyodide}
+#| label: sentence-py
+import pandas as pd
+starwars = pd.DataFrame({
+  "name":    ["Djarin", "Kylo", "Hux", "Finn"],
+  "species": ["Human", "Human", "Human", "Human"],
+  "height":  [180 + 8, 189, 170, 178],
+  "mass":    [80 + 20, 89, 80, 73]})
+
+(starwars
+  .query("species == 'Human' and height > 185")
+  [["name", "height", "mass"]]
+  .sort_values("mass", ascending=False)
+  .assign(bmi=lambda d: d["mass"] / (d["height"] / 100) ** 2))
+```
+
+::: {.callout-tip}
+## The `.assign` lambda habit
+`assign(bmi=lambda d: ...)` names the incoming frame `d` so every expression
+inside uses explicit `d["col"]` — no half-updated intermediate state. The
+lambda gets called with whatever the chain has produced so far, which is
+exactly the pipe's guarantee in R.
+:::
+
+## filter ↔ query/mask
+
+```{webr}
+#| label: filter-r
+library(tidyverse)
+genes <- tibble(
+  symbol = c("BRCA1", "TP53", "MYC", "GAPDH", "ACTB"),
+  chr    = c(17L, 17L, 8L, 12L, 7L),
+  log2fc = c(0.4, -1.1, 2.3, 0.0, -0.1),
+  padj   = c(0.21, 0.03, 1e-6, 0.98, 0.77)
+)
+
+filter(genes, padj < 0.05, abs(log2fc) > 1)   # , means AND
+filter(genes, chr %in% c(17, 8))              # membership
+filter(genes, is.na(padj) | padj < 0.05)      # NA never passes < — plan for it
+```
+
+```{pyodide}
+#| label: filter-py
+import pandas as pd
+genes = pd.DataFrame({
+  "symbol": ["BRCA1", "TP53", "MYC", "GAPDH", "ACTB"],
+  "chr":    [17, 17, 8, 12, 7],
+  "log2fc": [0.4, -1.1, 2.3, 0.0, -0.1],
+  "padj":   [0.21, 0.03, 1e-6, 0.98, 0.77]})
+
+print(genes.query("padj < 0.05 and abs(log2fc) > 1"), "\n")
+print(genes[genes.chr.isin([17, 8])], "\n")
+print(genes[genes.padj.isna() | (genes.padj < 0.05)])
+```
+
+::: {.callout-important}
+## NaN filter asymmetry — memorize this
+`padj < 0.05` is `NA` for missing values in R → those rows **drop silently**.
+In pandas the same comparison is `False` → rows also drop. Same outcome, but
+R-NA semantics can leak `NA` into downstream `if` statements, while pandas
+hides the drop from you. If "how many rows should survive?" matters,
+count before and after: `nrow()` / `len()` — the W2D1 audit habit.
+:::
+
+## mutate ↔ assign
+
+```{webr}
+#| label: mutate-r
+genes |>
+  mutate(
+    sig      = padj < 0.05,
+    direction = case_when(
+      is.na(padj)          ~ "unknown",
+      padj < 0.05 & log2fc > 0  ~ "up",
+      padj < 0.05 & log2fc < 0  ~ "down",
+      .default                  ~ "ns"
+    )
+  )
+```
+
+```{pyodide}
+#| label: mutate-py
+import numpy as np
+genes.assign(
+  sig=lambda d: d["padj"] < 0.05,
+  direction=lambda d: np.select(
+    [d["padj"].isna(),
+     (d["padj"] < 0.05) & (d["log2fc"] > 0),
+     (d["padj"] < 0.05) & (d["log2fc"] < 0)],
+    ["unknown", "up", "down"],
+    default="ns"))
+```
+
+The translation table for conditional columns:
+
+| R | Python |
+|---|---|
+| `if_else(cond, yes, no)` | `np.where(cond, yes, no)` |
+| `case_when(c1 ~ v1, c2 ~ v2, .default ~ v3)` | `np.select([c1, c2], [v1, v2], default=v3)` |
+| `replace_na(x, 0)` | `s.fillna(0)` |
+
+## The split → apply → combine spine
+
+The single most important wrangling pattern in both languages:
+
+```{webr}
+#| label: gsa-r
+library(tidyverse)
+
+assay <- tibble(
+  treatment = rep(c("control", "treated"), each = 4),
+  peptide   = rep(c("SubP", "Vaso"), times = 4),
+  conc      = c(10.1, 11.3, 9.8, 12.0, 20.5, 19.2, 21.8, 18.9)
+)
+
+assay |>
+  group_by(treatment, peptide) |>
+  summarise(
+    n    = n(),
+    mean = mean(conc),
+    sd   = sd(conc),
+    .groups = "drop"
+  )
+```
+
+```{pyodide}
+#| label: gsa-py
+import pandas as pd
+assay = pd.DataFrame({
+  "treatment": ["control"]*2 + ["treated"]*2,
+  "peptide":   ["SubP", "Vaso", "SubP", "Vaso"] * 2,
+  "conc":      [10.1, 20.5, 11.3, 19.2, 9.8, 21.8, 12.0, 18.9]})
+
+(assay
+  .groupby(["treatment", "peptide"])["conc"]
+  .agg(n="count", mean="mean", sd="std")
+  .reset_index())
+```
+
+Identical output: one row per group, three named summaries. Note the
+**`.groups = "drop"`** vs **`.reset_index()`** pairing — both un-nest the
+group keys back into plain columns. Skip them and R keeps a grouped df
+(mutate acts per-group later!) while pandas gives you a MultiIndex that
+breaks naive column access.
+
+::: {.callout-tip}
+## Grouped mutate = group-wise z-scores
+`group_by(g) |> mutate(z = (x - mean(x)) / sd(x))` computes **within each
+group** — the column-window normalization you'll do constantly (batch
+correction, per-gene scaling). pandas twin:
+`df.groupby("g")["x"].transform(lambda s: (s - s.mean()) / s.std())` —
+`transform` keeps the shape, `agg` shrinks it. Shape is the whole difference.
+:::
+
+## Row-wise: legal, but the last resort
+
+Sometimes each row genuinely needs its own small computation — per-sample
+QC flags over a handful of columns:
+
+```{webr}
+#| label: rowwise-r
+qc <- tibble(sample = c("S1", "S2", "S3"),
+             pct_dup = c(8.1, 22.4, 5.5),
+             pct_map = c(91.0, 62.3, 95.2))
+
+qc |>
+  rowwise() |>
+  mutate(fail = sum(c_across(pct_dup:pct_map) > c(20, 80)) >= 1) |>
+  ungroup()
+```
+
+```{pyodide}
+#| label: rowwise-py
+import pandas as pd
+qc = pd.DataFrame({"sample": ["S1", "S2", "S3"],
+                   "pct_dup": [8.1, 22.4, 5.5],
+                   "pct_map": [91.0, 62.3, 95.2]})
+
+qc.assign(fail=(qc["pct_dup"] > 20) | (qc["pct_map"] < 80))
+```
+
+The Python answer needed **no** row loop at all — boolean columns combine
+column-wise. That's the point of the comparison: R's `rowwise()` is a
+deliberate, narrow tool; pandas' `.apply(axis=1)` is the AI-generated smell
+that hides vectorizable logic. Rule: **write it column-wise if any way
+exists; reach for row-wise only when the operation truly can't broadcast.**
+
+## Drills (live pad)
+
+Predict each output **before** running.
+
+```{webr}
+#| label: drills
+library(tidyverse)
+df <- tibble(g = c("a", "a", "b", "b", "c"),
+             x = c(4, 1, 3, 2, 5),
+             y = c(10, 20, 30, 40, 50))
+
+# 1. filter(df, g %in% c("a", "c")) — how many rows?
+
+# 2. arrange(df, desc(x)) — first row?
+
+# 3. mutate(df, z = x * y) — z for the g == "c" row?
+
+# 4. count(df, g) — what does the c row say?
+
+# 5. slice_max(df, y, n = 2) — which g's?
+
+# 6. df |> group_by(g) |> summarise(m = mean(x)) — m for b?
+
+# 7. Same but with sd instead of mean — what happens for a group of 1?
+#    (add a "d" row with one value to see)
+
+# 8. distinct(df, g) — how many rows?
+
+# 9. pull(df, x) — what type is it? How is it different from df["x"]?
+
+# 10. df |> mutate(rk = min_rank(desc(y))) — rank of the 30?
+
+# 11. filter(df, between(x, 2, 4)) — how many rows?
+
+# 12. df |> group_by(g) |> mutate(n_grp = n()) |> ungroup() — n_grp for a?
+```
+
+::: {.callout-tip collapse="true"}
+## Expected answers
+1. 3 rows (a, a, c)
+2. g = "c", x = 5
+3. 250
+4. n = 1
+5. c (50) and b (40)
+6. 2.5
+7. sd of one value is NA — n = 1 groups make sd meaningless; filter `n >= 2` first
+8. 3 — one row per unique g (first occurrence wins)
+9. A bare numeric vector; `df["x"]` keeps it inside a tibble — `pull` unwraps
+10. 4 — min_rank ties share ranks, no gaps (dense_rank has no gaps, row_number never ties)
+11. 3 rows (x = 4, 3, 2)
+12. 2
+:::
+
+## Python drills (live pad)
+
+```{pyodide}
+#| label: drills-py
+import pandas as pd
+df = pd.DataFrame({"g": list("aabbc"),
+                   "x": [4, 1, 3, 2, 5],
+                   "y": [10, 20, 30, 40, 50]})
+
+# 1. df.query("g in ['a','c']") — how many rows?
+
+# 2. df.sort_values("x", ascending=False).iloc[0] — which g?
+
+# 3. df.assign(z=df.x * df.y).loc[4, "z"]
+
+# 4. df.g.value_counts()["c"]
+
+# 5. df.nlargest(2, "y")["g"].tolist()
+
+# 6. df.groupby("g")["x"].mean()["b"]
+
+# 7. df.groupby("g")["x"].std() — what is it for a 1-row group?
+
+# 8. df.drop_duplicates("g").shape[0]
+
+# 9. df["x"] vs df[["x"]] — which one is a Series, which a DataFrame?
+
+# 10. df["y"].rank(ascending=False) — rank of 30?
+
+# 11. df[df.x.between(2, 4)] — how many rows?
+
+# 12. df.groupby("g")["x"].transform("size") for the first two rows?
+```
+
+::: {.callout-tip collapse="true"}
+## Expected answers (Python)
+1. 3
+2. c
+3. 250
+4. 1
+5. ['c', 'b']
+6. 2.5
+7. NaN — same trap as R's `sd` with n = 1
+8. 3
+9. `df["x"]` = Series; `df[["x"]]` = DataFrame (W1's `[` vs `[[` again!)
+10. 4.0 — pandas default rank is average-method; pass `method="min"` for min_rank
+11. 3
+12. 2 and 2 — `transform` returns a same-length column (vs `agg`'s one-per-group)
+:::
+
+## Exercises
+
+### Exercise 1 — top-n per group
+
+Per `peptide`, keep the 2 highest-`conc` observations. R first:
+
+```{webr}
+#| exercise: ex-d2-topn
+library(tidyverse)
+assay <- tibble(
+  peptide = rep(c("SubP", "Vaso"), each = 4),
+  conc    = c(10.1, 11.3, 25.0, 9.8, 20.5, 19.2, 21.8, 18.9)
+)
+
+assay |>
+  ______
+```
+
+::: {.hint exercise="ex-d2-topn"}
+`group_by(peptide) |> slice_max(conc, n = 2)` — verbs compose inside groups.
+:::
+
+::: {.solution exercise="ex-d2-topn"}
+```r
+assay |>
+  group_by(peptide) |>
+  slice_max(conc, n = 2) |>
+  ungroup()
+```
+:::
+
+### Exercise 2 — same, pandas dialect
+
+```{pyodide}
+#| exercise: ex-d2-topn-py
+import pandas as pd
+assay = pd.DataFrame({
+  "peptide": ["SubP"]*4 + ["Vaso"]*4,
+  "conc":    [10.1, 11.3, 25.0, 9.8, 20.5, 19.2, 21.8, 18.9]})
+
+______
+```
+
+::: {.hint exercise="ex-d2-topn-py"}
+`groupby("peptide", group_keys=False).apply(lambda d: d.nlargest(2, "conc"))`
+— or the slicker sort-then-head trick.
+:::
+
+::: {.solution exercise="ex-d2-topn-py"}
+```python
+(assay
+  .sort_values("conc", ascending=False)
+  .groupby("peptide")
+  .head(2))
+# sort once globally, then head(2) per group — avoids the .apply entirely
+```
+:::
+
+### Exercise 3 — conditional column, three-way
+
+Add `direction`: "up" if `log2fc > 1` and `padj < 0.05`; "down" if
+`log2fc < -1` and `padj < 0.05`; else "ns". R first, then Python.
+
+```{webr}
+#| exercise: ex-d2-direction
+library(tidyverse)
+de <- tibble(
+  gene   = c("A", "B", "C", "D"),
+  log2fc = c(2.1, -1.8, 0.5, 3.0),
+  padj   = c(0.01, 0.02, 0.01, 0.40)
+)
+
+de |>
+  ______
+```
+
+::: {.hint exercise="ex-d2-direction"}
+`case_when()` — order matters; the first TRUE wins.
+:::
+
+::: {.solution exercise="ex-d2-direction"}
+```r
+de |>
+  mutate(direction = case_when(
+    padj < 0.05 & log2fc >  1 ~ "up",
+    padj < 0.05 & log2fc < -1 ~ "down",
+    .default = "ns"
+  ))
+```
+:::
+
+```{pyodide}
+#| exercise: ex-d2-direction-py
+import pandas as pd
+de = pd.DataFrame({
+  "gene":   list("ABCD"),
+  "log2fc": [2.1, -1.8, 0.5, 3.0],
+  "padj":   [0.01, 0.02, 0.01, 0.40]})
+
+______
+```
+
+::: {.hint exercise="ex-d2-direction-py"}
+`np.select([cond1, cond2], ["up", "down"], default="ns")` — first-listed wins,
+same as case_when.
+:::
+
+::: {.solution exercise="ex-d2-direction-py"}
+```python
+import numpy as np
+de.assign(direction=np.select(
+  [(de.padj < 0.05) & (de.log2fc >  1),
+   (de.padj < 0.05) & (de.log2fc < -1)],
+  ["up", "down"], default="ns"))
+```
+:::
+
+### Exercise 4 — group-wise normalization
+
+Within each `batch`, express every `conc` as a z-score. This is the column
+you'd use before comparing batches. Both dialects.
+
+```{webr}
+#| exercise: ex-d2-zscore
+library(tidyverse)
+dat <- tibble(
+  batch = c("B1", "B1", "B2", "B2", "B2"),
+  conc  = c(10, 12, 20, 24, 22)
+)
+
+dat |>
+  ______
+```
+
+::: {.hint exercise="ex-d2-zscore"}
+grouped `mutate`: `(conc - mean(conc)) / sd(conc)`.
+:::
+
+::: {.solution exercise="ex-d2-zscore"}
+```r
+dat |>
+  group_by(batch) |>
+  mutate(z = (conc - mean(conc)) / sd(conc)) |>
+  ungroup()
+```
+:::
+
+```{pyodide}
+#| exercise: ex-d2-zscore-py
+import pandas as pd
+dat = pd.DataFrame({"batch": ["B1","B1","B2","B2","B2"],
+                    "conc":  [10, 12, 20, 24, 22]})
+
+______
+```
+
+::: {.hint exercise="ex-d2-zscore-py"}
+`groupby("batch")["conc"].transform(...)` — transform keeps row alignment.
+:::
+
+::: {.solution exercise="ex-d2-zscore-py"}
+```python
+dat.assign(z=dat.groupby("batch")["conc"]
+             .transform(lambda s: (s - s.mean()) / s.std()))
+```
+:::
+
+### Exercise 5 — the AI-code refactor
+
+Refactor the loop below into verbs. It computes, per sample, whether ANY
+metric failed QC. R version:
+
+```{webr}
+#| exercise: ex-d2-refactor
+qc <- data.frame(
+  sample  = c("S1", "S2", "S3"),
+  pct_dup = c(8.1, 22.4, 5.5),
+  reads_m = c(21.0, 4.2, 18.9)
+)
+
+# ❌ AI-smell: loop + growing vector (W1's forbidden pattern, with a for-loop)
+out <- c()
+for (i in 1:nrow(qc)) {
+  out[i] <- qc$pct_dup[i] > 20 || qc$reads_m[i] < 10
+}
+qc$fail <- out
+
+# ✅ Your turn — vectorized dplyr, no loop, no c()
+______
+```
+
+::: {.hint exercise="ex-d2-refactor"}
+Two boolean columns OR'd together: `mutate(fail = pct_dup > 20 | reads_m < 10)`.
+:::
+
+::: {.solution exercise="ex-d2-refactor"}
+```r
+qc |> mutate(fail = pct_dup > 20 | reads_m < 10)
+# recognize-the-smell: `||` is scalar-only (and now errors on vectors —
+# the loop used `||` on length-1 slices so it "worked"); row loops that
+# could be column ops are the #1 AI-R tell.
+```
+:::
+
+```{pyodide}
+#| exercise: ex-d2-refactor-py
+import pandas as pd
+qc = pd.DataFrame({"sample":  ["S1", "S2", "S3"],
+                   "pct_dup": [8.1, 22.4, 5.5],
+                   "reads_m": [21.0, 4.2, 18.9]})
+
+# ❌ AI-smell: df.apply(axis=1) with a per-row if/else
+qc["fail"] = qc.apply(lambda r: r["pct_dup"] > 20 or r["reads_m"] < 10, axis=1)
+
+# ✅ Your turn — column-wise, no apply
+______
+```
+
+::: {.hint exercise="ex-d2-refactor-py"}
+`(qc["pct_dup"] > 20) | (qc["reads_m"] < 10)` — pandas needs explicit
+parentheses; `|` binds tighter than comparison!
+:::
+
+::: {.solution exercise="ex-d2-refactor-py"}
+```python
+qc["fail"] = (qc["pct_dup"] > 20) | (qc["reads_m"] < 10)
+# recognize-the-smell: apply(axis=1) runs a Python function per row —
+# 100x slower on big frames and, worse, it hides vectorizable logic.
+```
+:::
+
+## Common pitfalls (real ones)
+
+::: {.callout-warning}
+## 1. Grouped state leaks
+In R, a `group_by` you never `ungroup()` makes every later `mutate` per-group
+— silent wrongness three steps later. In pandas, forgetting `reset_index()`
+after `agg` leaves a MultiIndex that breaks `df["col"]`. **End every
+grouped pipeline with the un-nesting step** (or a comment saying why not).
+:::
+
+::: {.callout-warning}
+## 2. pandas `|` without parentheses
+`df.a > 1 | df.b < 2` parses as `df.a > (1 | df.b) < 2` — bitwise `|`
+binds **tighter** than comparisons in Python (opposite of R, where `|`
+sits between `and` and the comparisons). Each side needs explicit
+parentheses.
+:::
+
+::: {.callout-warning}
+## 3. Chained assignment vanishes
+`df[df.g == "a"]["x"] = 0` — the classic SettingWithCopyWarning: you edited
+a copy; the original is untouched (or a view was — undefined!). One `.loc`
+call does it right: `df.loc[df.g == "a", "x"] = 0`. The dplyr twin `filter()
+|> mutate()` is safe because verbs always return fresh frames — one of the
+few places R is *less* trap-prone.
+:::
+
+::: {.callout-warning}
+## 4. `summarise` on an empty group
+After a filter that removes everything, `summarise(mean(x))` returns `NA`/NaN
+in R, errors or NaN in pandas depending on the agg — never a helpful
+message. Guard: check `nrow()`/`len()` before summarising filtered data.
+:::
+
+## Self-quiz — predict the output
+
+```{webr}
+#| label: quiz
+library(tidyverse)
+df <- tibble(g = c("a", "a", "b"), x = c(1, 2, 3), y = c(9, 9, 9))
+
+# Q1
+df |> filter(x > 1) |> nrow()
+
+# Q2
+df |> group_by(g) |> summarise(m = mean(x)) |> nrow()
+
+# Q3
+df |> mutate(z = x > 1) |> pull(z) |> typeof()
+
+# Q4
+df |> arrange(g, desc(x)) |> slice(1) |> pull(x)
+
+# Q5
+df |> group_by(g) |> mutate(n = n()) |> filter(n == 2) |> nrow()
+```
+
+::: {.callout-tip collapse="true"}
+## Quiz answers
+1. 2
+2. 2 — one row per group
+3. "logical" — comparisons make logical columns, not 0/1 numerics
+4. 2 — group a first (arrange on g), and within a the larger x
+5. 2 — only group a has n == 2; both of its rows survive
+:::
+
+## Wrap-up checklist
+
+- [ ] The 6 verbs and their pandas method-twins — no notes needed
+- [ ] `group_by + summarise` ↔ `groupby + agg` with un-nesting at the end
+- [ ] Grouped `mutate` ↔ `transform` — shape stays, group means computed within
+- [ ] `case_when` ↔ `np.select`, first condition wins in both
+- [ ] Row-wise ops are the last resort in both languages
+- [ ] I scored 5/5 on the self-quiz
+
+**Tomorrow:** pictures — the grammar of graphics vs matplotlib's imperative
+style, and the five charts that carry 95% of bioinformatics reporting.

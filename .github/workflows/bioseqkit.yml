@@ -1,0 +1,38 @@
+name: bioseqkit CI
+
+on:
+  push:
+    branches: [main]
+    paths: ["projects/p3/**"]
+  pull_request:
+    paths: ["projects/p3/**"]
+  workflow_dispatch:
+
+jobs:
+  test-r:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: r-lib/actions/setup-r@v2
+      - name: Install testthat
+        run: Rscript -e 'install.packages("testthat", repos = "https://cloud.r-project.org")'
+      - name: Install package
+        working-directory: projects/p3/bioseqkitr
+        run: R CMD INSTALL .
+      - name: Run R tests
+        working-directory: projects/p3/bioseqkitr
+        run: Rscript -e 'library(testthat); test_dir("tests/testthat", reporter = "summary")'
+
+  test-python:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install package + pytest
+        working-directory: projects/p3/bioseqkit_py
+        run: pip install -e . pytest
+      - name: Run pytest
+        working-directory: projects/p3/bioseqkit_py
+        run: pytest -v

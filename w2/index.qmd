@@ -1,0 +1,45 @@
+---
+title: "Week 2 — Wrangling, Visualization, Statistics"
+subtitle: "The tidyverse/pandas workhorse week: import → tidy → wrangle → plot → test"
+---
+
+## The week at a glance
+
+| Day | Lesson | Superpower gained |
+|---|---|---|
+| 1 | [Import/Export + Tidy Data](day1-import-tidy.qmd) | any table in, tidy table out; pivots & joins in both dialects |
+| 2 | [The Grammar of Wrangling](day2-verbs.qmd) | dplyr's 6 verbs ↔ the pandas method chain |
+| 3 | [Visualization](day3-visualization.qmd) | the 5 charts that matter, grammar vs imperative |
+| 4 | [Algorithm Gym #2](day4-gym2.qmd) | two pointers, sliding window, prefix sums |
+| 5 | [Statistics + Project 2](day5-stats-project2.qmd) | the test battery + a reproducible statistical report |
+
+## The rhythm of every day (~1–2 hrs)
+
+1. **Cheat sheet** — 60–90 seconds of scanning, top of each lesson
+2. **Lesson** — prose + live examples, both dialects
+3. **Drills** — ~12 one-liners in a live pad; predict out loud, then run
+4. **Exercises** — 5–6 graded, each with hint + solution (attempt first!)
+5. **Common pitfalls** — real bugs, most caught in real analyses
+6. **Self-quiz** — 5 predict-the-output questions; answers collapsed below
+
+## Ground rules for the week
+
+1. **Tidy first, analyze second.** 80% of "statistics problems" are data-shape problems
+2. Every analysis step is a **verb** (R) or a **method chain** (Python) — no row loops
+3. Plots get **titles and axis labels** before they're allowed in a report
+4. Every random step gets a **seed** — the reproducibility thread starts today
+5. End-of-week checkpoint: Project 2 — the same EDA + statistical report in both
+   languages, with **identical numbers**
+
+## The Week 1 → Week 2 bridge
+
+Week 1 gave you data structures and functions. Week 2 is where those live on real
+tables: the peptide assay you cleaned in Project 1 comes back on Day 5, and you'll
+run the full statistical battery on it — distributions, t-tests, ANOVA, χ²,
+regression — and ship it as a rendered Quarto report with `set.seed` and session
+info, exactly the way a real analysis is handed off.
+
+## Drill rule
+
+Predict the output **out loud** before running any cell. Being wrong on
+purpose is the fastest refresher there is.

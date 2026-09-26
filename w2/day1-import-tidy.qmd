@@ -1,0 +1,590 @@
+---
+title: "Day 1 — Import/Export + Tidy Data"
+subtitle: "Week 2 · readr/readxl vs pandas IO; the 3 tidy rules; pivot longer/wider; joins"
+---
+
+## Cheat sheet (60 seconds)
+
+| Task | R | Python |
+|---|---|---|
+| read CSV | `readr::read_csv("f.csv")` | `pd.read_csv("f.csv")` |
+| read Excel | `readxl::read_excel("f.xlsx", sheet = 2)` | `pd.read_excel("f.xlsx", sheet_name=2)` |
+| write CSV | `write_csv(df, "f.csv")` | `df.to_csv("f.csv", index=False)` |
+| peek after import | `glimpse(df)` | `df.info()` / `df.head()` |
+| NA strings on import | `read_csv(f, na = c("", "NA", "n/a"))` | `pd.read_csv(f, na_values=["", "NA", "n/a"])` |
+| force column types | `col_types = cols(id = col_character())` | `dtype = {"id": str}` |
+| wide → long | `pivot_longer(cols, names_to, values_to)` | `df.melt(id_vars, var_name, value_name)` |
+| long → wide | `pivot_wider(names_from, values_from)` | `df.pivot(index, columns, values)` |
+| left join | `left_join(a, b, by = "k")` | `a.merge(b, on="k", how="left")` |
+| inner / full join | `inner_join()` / `full_join()` | `how="inner"` / `how="outer"` |
+| anti join (rows in a, not b) | `anti_join(a, b, by = "k")` | `a[~a.k.isin(b.k)]` |
+| stack rows | `bind_rows(a, b)` | `pd.concat([a, b], ignore_index=True)` |
+
+## The import reflex
+
+Importing is never one step — it's **read → peek → check types → fix types**.
+Skipping steps 2–4 is how `"-"` ends up in a counts matrix (Week 1, Day 2).
+The reflex, both dialects:
+
+```{webr}
+#| label: import-r
+# webR has a virtual file system — write a small messy CSV, then import it
+writeLines(c(
+  "sample_id,reads,qc,arrival",
+  "S1,4.2e6,TRUE,2024-03-01",
+  "S2,3.9e6,TRUE,2024-03-03",
+  "S3,n/a,FALSE,2024-03-07"
+), "seqrun.csv")
+
+runs <- read_csv("seqrun.csv", show_col_types = TRUE)  # peek = col_types spec!
+glimpse(runs)
+```
+
+```{pyodide}
+#| label: import-py
+import pandas as pd
+from io import StringIO
+
+text = """sample_id,reads,qc,arrival
+S1,4.2e6,TRUE,2024-03-01
+S2,3.9e6,TRUE,2024-03-03
+S3,n/a,FALSE,2024-03-07
+"""
+runs = pd.read_csv(StringIO(text))
+runs.info()                 # the pandas 'peek' — note the dtypes column
+print(runs)
+```
+
+::: {.callout-important}
+## What to check every single time
+1. **Row count** — matches what you expect? (`nrow(df)` / `len(df)`)
+2. **Column types** — is `reads` numeric, or did "n/a" make it text?
+   (`typeof()` per column / `df.dtypes`)
+3. **NAs landed as NAs** — not the *string* `"NA"`, not `-999`
+   (`colSums(is.na(df))` / `df.isna().sum()`)
+:::
+
+`readr` guesses types from the **first 1000 rows** — a dataset with a surprise
+at row 2000 will guess wrong (see pitfalls). `pandas` reads everything first,
+but pays for it with `object` columns when mixed junk appears.
+
+## Tidy data: the 3 rules
+
+Every real analysis starts by reshaping toward tidy. A table is **tidy** when:
+
+1. **Each variable is a column**
+2. **Each observation is a row**
+3. **Each type of observational unit is a table**
+
+Violations come in three flavors — you will meet all three in the wild:
+
+| Violation | Example | Fix |
+|---|---|---|
+| headers are values | columns `rep1 rep2 rep3` | `pivot_longer` / `melt` |
+| multiple vars in one column | `B2_treated` | `separate` / `str` split |
+| variables in rows AND cols | Excel cross-tabs | `pivot_longer` then `pivot_wider` |
+
+Why bother? Because **ggplot, faceting, group_by, groupby, and every test in
+Day 5 want one variable per column.** Untidy in → wrangling hell.
+
+## Wide → long: `pivot_longer` ↔ `melt`
+
+A qPCR plate: one row per gene, one column per replicate. Humans like reading
+this; computers can't group by it:
+
+```{webr}
+#| label: longer-r
+library(tidyverse)
+
+plate <- tibble(
+  gene   = c("GAPDH", "TP53", "ACTB"),
+  rep1   = c(21.2, 30.1, 19.8),
+  rep2   = c(21.5, 29.7, 20.2),
+  rep3   = c(21.0, 31.0, 19.9)
+)
+
+plate_long <- pivot_longer(plate,
+  cols      = rep1:rep3,
+  names_to  = "replicate",
+  values_to = "ct"
+)
+plate_long
+```
+
+```{pyodide}
+#| label: longer-py
+import pandas as pd
+
+plate = pd.DataFrame({
+  "gene": ["GAPDH", "TP53", "ACTB"],
+  "rep1": [21.2, 30.1, 19.8],
+  "rep2": [21.5, 29.7, 20.2],
+  "rep3": [21.0, 31.0, 19.9]})
+
+plate_long = plate.melt(
+  id_vars    = "gene",
+  value_vars = ["rep1", "rep2", "rep3"],
+  var_name   = "replicate",
+  value_name = "ct")
+plate_long
+```
+
+Same shape out: 9 rows (3 genes × 3 replicates), columns
+`gene, replicate, ct`. In R you list what to **melt** (`cols`); in pandas you
+list what to **keep** (`id_vars`) — opposite habits, same result.
+
+## Long → wide: `pivot_wider` ↔ `pivot`
+
+The reverse move — summaries into comparison columns:
+
+```{webr}
+#| label: wider-r
+plate_long |>
+  group_by(gene) |>
+  summarise(mean_ct = mean(ct)) |>
+  pivot_wider(names_from = gene, values_from = mean_ct)
+```
+
+```{pyodide}
+#| label: wider-py
+mean_ct = (plate_long
+  .groupby("gene", as_index=False)["ct"].mean()
+  .rename(columns={"ct": "mean_ct"}))
+mean_ct.pivot(index=None, columns="gene", values="mean_ct")
+```
+
+::: {.callout-warning}
+## pandas `.pivot` demands uniqueness
+`df.pivot(...)` **errors** on duplicate index/column pairs — which is correct
+behavior, because two rows can't share one cell. If you get that error, you
+meant `pivot_table` (which aggregates) or you forgot a `groupby` first. R's
+`pivot_wider` silently creates list-columns instead — quieter, but the
+resulting table is not what you think it is. Check with
+`sum(duplicated(select(df, gene)))`.
+:::
+
+## The joins
+
+Four joins, one mnemonic each — keep the **left** table's rows, keep only
+**matching** rows, keep **everything**, keep what **didn't** match:
+
+```{webr}
+#| label: joins-r
+expr  <- tibble(gene_id = c("ENSG1", "ENSG2", "ENSG9"),
+                log2fc  = c(1.2, -0.4, 2.8))
+annot <- tibble(gene_id = c("ENSG1", "ENSG2", "ENSG3"),
+                symbol  = c("MYC", "TP53", "BRCA1"))
+
+left_join(expr, annot, by = "gene_id")    # keeps ENSG9, symbol NA
+inner_join(expr, annot, by = "gene_id")   # only mapped genes
+anti_join(expr, annot, by = "gene_id")    # ENSG9 — the unmapped one
+```
+
+```{pyodide}
+#| label: joins-py
+import pandas as pd
+
+expr  = pd.DataFrame({"gene_id": ["ENSG1", "ENSG2", "ENSG9"],
+                      "log2fc":  [1.2, -0.4, 2.8]})
+annot = pd.DataFrame({"gene_id": ["ENSG1", "ENSG2", "ENSG3"],
+                      "symbol":  ["MYC", "TP53", "BRCA1"]})
+
+print(expr.merge(annot, on="gene_id", how="left"), "\n")    # ENSG9 -> NaN symbol
+print(expr.merge(annot, on="gene_id", how="inner"), "\n")   # only mapped
+print(expr[~expr.gene_id.isin(annot.gene_id)])              # the anti-join
+```
+
+::: {.callout-tip}
+## The pandas anti-join idiom
+pandas has no `anti_join`; the idiom is a negated `isin` mask:
+`a[~a.key.isin(b.key)]`. It reads "rows of a whose key is NOT in b" —
+write it enough times and it becomes muscle memory. For a merged view with
+provenance, `merge(..., how="left", indicator=True)` then filter on
+`_merge == "left_only"`.
+:::
+
+Row-count check after every join (the join audit):
+
+```{webr}
+#| label: audit-r
+n_left <- nrow(expr)
+joined <- left_join(expr, annot, by = "gene_id")
+nrow(joined) == n_left      # FALSE means keys duplicated → row explosion
+```
+
+```{pyodide}
+#| label: audit-py
+joined = expr.merge(annot, on="gene_id", how="left")
+print(len(joined) == len(expr))
+# protect yourself up front — raise instead of explode:
+expr.merge(annot, on="gene_id", how="left", validate="one_to_one")
+```
+
+::: {.callout-important}
+## `validate=` is the guard clause of joins
+`validate="one_to_one"`, `"one_to_many"`, `"many_to_one"` make the wrong-key
+shape **fail loudly** instead of silently multiplying rows. This is W1's
+`stopifnot` habit, ported to joins.
+:::
+
+## Stacking: `bind_rows` ↔ `concat`
+
+```{webr}
+#| label: bind-r
+march <- tibble(sample = "S1", reads = 4.2e6)
+april <- tibble(sample = "S2", reads = 3.9e6)
+bind_rows(march, april, .id = "month_file")
+```
+
+```{pyodide}
+#| label: bind-py
+import pandas as pd
+march = pd.DataFrame({"sample": ["S1"], "reads": [4.2e6]})
+april = pd.DataFrame({"sample": ["S2"], "reads": [3.9e6]})
+pd.concat([march, april], ignore_index=True)
+```
+
+The Week 1 "collect then bind once" pattern is the consumer of these:
+`map(files, read_csv) |> list_rbind()` ↔
+`pd.concat([pd.read_csv(f) for f in files], ignore_index=True)`.
+
+## Drills (live pad)
+
+Predict each output **before** running.
+
+```{webr}
+#| label: drills
+library(tidyverse)
+a <- tibble(k = c(1, 2, 3), x = c("a", "b", "c"))
+b <- tibble(k = c(2, 3, 4), y = c(10, 20, 30))
+
+# 1. nrow(left_join(a, b, by = "k"))? Predict, then run.
+
+# 2. nrow(inner_join(a, b, by = "k"))?
+
+# 3. nrow(full_join(a, b, by = "k"))?
+
+# 4. Which key appears ONLY in a? (one anti_join)
+
+# 5. tibble(g = c("x", "x", "y"), v1 = 1:2, v2 = 3:4) — make it long
+#    (columns v1, v2 -> rows)
+
+# 6. Pivot your answer to 5 back to wide
+
+# 7. readr: import "a,b\n1,n/a\n2,5" with n/a as NA (one expression, use I())
+
+# 8. nrow(bind_rows(a, a))? And with .id set?
+
+# 9. distinct(starwars) vs starwars — same row count? (predict first)
+
+# 10. count(starwars, sex) — what shape comes back?
+```
+
+::: {.callout-tip collapse="true"}
+## Expected answers
+1. 3 — left join keeps all of a
+2. 2 — keys 2 and 3 only
+3. 4 — union of keys
+4. `anti_join(a, b, by = "k")` → key 1
+5. `pivot_longer(cols = v1:v2, names_to = "which", values_to = "val")`
+6. `pivot_wider(names_from = which, values_from = val)`
+7. `read_csv(I("a,b\n1,n/a\n2,5"), na = "n/a")`
+8. 6; with `.id = "src"` you get a `src` column of "1"/"2"
+9. No — starwars has a duplicate row; `distinct()` removes it
+10. One row per level of `sex`, with column `n` — tidy by construction
+:::
+
+## Python drills (live pad)
+
+Same reflexes, other dialect.
+
+```{pyodide}
+#| label: drills-py
+import pandas as pd
+a = pd.DataFrame({"k": [1, 2, 3], "x": ["a", "b", "c"]})
+b = pd.DataFrame({"k": [2, 3, 4], "y": [10, 20, 30]})
+
+# 1. Length of a.merge(b, on="k", how="left")? Then inner, then outer.
+
+# 2. Rows of a whose key is NOT in b (the anti-join idiom)
+
+# 3. Same merge as 1 but FAIL if the key were not unique (one argument)
+
+# 4. df = pd.DataFrame({"g": ["x","x","y"], "v1":[1,2], "v2":[3,4]})
+#    -> melt it long, then pivot it back
+
+# 5. pd.read_csv from a StringIO of "a,b\n1,n/a\n2,5" with n/a as NaN
+
+# 6. pd.concat([a, a]) — what's wrong with the resulting index, and which
+#    argument fixes it?
+
+# 7. a.merge(b, on="k", how="left", indicator=True) — which rows say left_only?
+```
+
+::: {.callout-tip collapse="true"}
+## Expected answers (Python)
+1. 3 · 2 · 4 — identical numbers to the R drills
+2. `a[~a.k.isin(b.k)]` → key 1
+3. `validate="one_to_one"`
+4. `df.melt(id_vars="g", var_name="which", value_name="val")` then
+   `.pivot(index="g", columns="which", values="val")`
+5. `pd.read_csv(StringIO("a,b\n1,n/a\n2,5"), na_values="n/a")`
+6. Index repeats 0,1,0,1 — `ignore_index=True` (or call `.reset_index(drop=True)`)
+7. The key=1 row — merge's `_merge` column is the built-in anti-join radar
+:::
+
+## Exercises
+
+### Exercise 1 — untidy clinical table
+
+Wide Excel export: one column per visit. Make it long: one row per
+patient-visit.
+
+```{webr}
+#| exercise: ex-d1-long
+library(tidyverse)
+clinical <- tibble(
+  patient  = c("P1", "P2"),
+  visit1   = c(120, 98),
+  visit2   = c(115, 101),
+  visit3   = c(109, NA)
+)
+
+clinical |>
+  ______
+```
+
+::: {.hint exercise="ex-d1-long"}
+`pivot_longer(cols = visit1:visit3, names_to = "visit", values_to = "bp")`
+:::
+
+::: {.solution exercise="ex-d1-long"}
+```r
+clinical |>
+  pivot_longer(cols = visit1:visit3,
+               names_to = "visit", values_to = "bp")
+# 6 rows. NA travels along — drop later with filter(!is.na(bp)) if you must.
+```
+:::
+
+### Exercise 2 — same table, pandas dialect
+
+```{pyodide}
+#| exercise: ex-d1-long-py
+import pandas as pd
+clinical = pd.DataFrame({
+  "patient": ["P1", "P2"],
+  "visit1":  [120, 98],
+  "visit2":  [115, 101],
+  "visit3":  [109, None]})
+
+clinical.melt(______)
+```
+
+::: {.hint exercise="ex-d1-long-py"}
+`melt(id_vars="patient", value_vars=["visit1","visit2","visit3"],
+var_name="visit", value_name="bp")` — pandas wants the keepers, not the melters.
+:::
+
+::: {.solution exercise="ex-d1-long-py"}
+```python
+clinical.melt(id_vars="patient",
+              value_vars=["visit1", "visit2", "visit3"],
+              var_name="visit", value_name="bp")
+```
+:::
+
+### Exercise 3 — the join audit in action
+
+You suspect `annot` has duplicated gene_ids. Use `validate` to prove it, then
+de-duplicate `annot` (keep first occurrence) and make the join pass.
+
+```{webr}
+#| exercise: ex-d1-validate
+expr  <- tibble(gene_id = c("E1", "E2"), fc = c(1.0, -2.0))
+annot <- tibble(gene_id = c("E1", "E2", "E1"),
+                symbol  = c("A", "B", "A-copy"))
+
+# a) left_join with validate="one_to_one" — watch it fail
+# b) de-duplicate annot (dplyr; keep first)
+# c) retry the join
+______
+```
+
+::: {.hint exercise="ex-d1-validate"}
+b) `annot |> distinct(gene_id, .keep_all = TRUE)`
+:::
+
+::: {.solution exercise="ex-d1-validate"}
+```r
+# a) errors: "not one_to_one" — exactly the loud failure you want
+# left_join(expr, annot, by = "gene_id", validate = "one_to_one")
+
+annot_fixed <- annot |> distinct(gene_id, .keep_all = TRUE)
+left_join(expr, annot_fixed, by = "gene_id", validate = "one_to_one")
+```
+:::
+
+### Exercise 4 — pandas twin
+
+```{pyodide}
+#| exercise: ex-d1-validate-py
+import pandas as pd
+expr  = pd.DataFrame({"gene_id": ["E1", "E2"], "fc": [1.0, -2.0]})
+annot = pd.DataFrame({"gene_id": ["E1", "E2", "E1"],
+                      "symbol":  ["A", "B", "A-copy"]})
+
+# a) merge with validate="one_to_one" — watch it fail
+# b) drop_duplicates on annot (keep first)
+# c) retry
+______
+```
+
+::: {.hint exercise="ex-d1-validate-py"}
+b) `annot.drop_duplicates(subset="gene_id", keep="first")`
+:::
+
+::: {.solution exercise="ex-d1-validate-py"}
+```python
+annot_fixed = annot.drop_duplicates(subset="gene_id", keep="first")
+expr.merge(annot_fixed, on="gene_id", how="left", validate="one_to_one")
+```
+:::
+
+### Exercise 5 — two variables hiding in one column
+
+`batch_treatment` holds `B1_control`, `B2_treated`, ... — split it into two
+real columns, R dialect.
+
+```{webr}
+#| exercise: ex-d1-separate
+library(tidyverse)
+dat <- tibble(batch_treatment = c("B1_control", "B2_treated", "B3_control"),
+              conc = c(10.1, 20.3, 9.8))
+
+dat |>
+  ______
+```
+
+::: {.hint exercise="ex-d1-separate"}
+`separate(batch_treatment, into = c("batch", "treatment"), sep = "_")`
+:::
+
+::: {.solution exercise="ex-d1-separate"}
+```r
+dat |>
+  separate(batch_treatment, into = c("batch", "treatment"), sep = "_")
+# tidyr 1.3+: separate_wider_position or str-split also fine; the point is
+# one variable per column before any group_by.
+```
+:::
+
+### Exercise 6 — import with intent
+
+Import this CSV so that `conc` is numeric with proper NAs, and `date` is a
+Date — *at import time*, not after. R first:
+
+```{webr}
+#| exercise: ex-d1-import
+writeLines(c(
+  "sample,conc,date,note",
+  "S1,12.5,2024-03-01,ok",
+  "S2,n/a,2024-03-02,ok",
+  "S3,9.1,not_a_date,lost"
+), "tricky.csv")
+
+______
+```
+
+::: {.hint exercise="ex-d1-import"}
+`read_csv("tricky.csv", na = c("n/a", "not_a_date"),
+col_types = cols(conc = col_double(), date = col_date()))`
+:::
+
+::: {.solution exercise="ex-d1-import"}
+```r
+read_csv("tricky.csv",
+  na = c("", "NA", "n/a", "not_a_date"),
+  col_types = cols(sample = col_character(),
+                   conc   = col_double(),
+                   date   = col_date(),
+                   note   = col_character()))
+# NOTE the consequence: row S2 loses its date too (it was "not_a_date").
+# Declaring types forces decisions — that's the point.
+```
+:::
+
+## Common pitfalls (real ones)
+
+::: {.callout-warning}
+## 1. Type-guessing only sees the first 1000 rows
+readr scans a sample of rows to guess types; a numeric column with one stray
+`"-"` at row 4000 arrives as character. `pandas` reads all rows but mints
+`object` columns for mixed junk. Either way: **check dtypes before math**
+(`summarise(across(everything(), typeof))` / `df.dtypes`).
+:::
+
+::: {.callout-warning}
+## 2. Duplicate keys explode joins
+`left_join` with a `by` key that repeats in the right table multiplies rows
+silently — a 10k-row frame becomes 30k and every downstream count is wrong.
+`validate=` in both languages turns this into an error instead.
+:::
+
+::: {.callout-warning}
+## 3. pandas `melt` ≠ tidy by itself
+Forgetting `id_vars` melts *everything*, including the identifier — you get
+`variable`/`value` soup with no way to group. R's `pivot_longer` has the
+mirror trap: `cols = everything()` melts keys away.
+:::
+
+::: {.callout-warning}
+## 4. `to_csv` without `index=False` writes a ghost column
+The pandas index becomes an unnamed first column; re-importing it later
+poisons `read_csv` with a mystery key. R doesn't have this problem — which
+is exactly why it's forgotten.
+:::
+
+## Self-quiz — predict the output
+
+```{webr}
+#| label: quiz
+# Q1: how many rows?
+a <- tibble(k = c(1, 1, 2)); b <- tibble(k = c(1, 3))
+nrow(left_join(a, b, by = "k"))
+
+# Q2: what shape?
+tibble(x = 1, y = 2, z = 3) |> pivot_longer(everything())
+
+# Q3: NA or NaN?
+left_join(tibble(k = 1), tibble(k = 2, v = 9), by = "k")
+
+# Q4: how many columns?
+tibble(a = 1, b = 2) |> bind_rows(tibble(a = 3, b = 4, c = 5))
+
+# Q5: TRUE or FALSE?
+tibble(k = c("a", "b")) |> anti_join(tibble(k = "a"), by = "k") |> nrow() == 1
+```
+
+::: {.callout-tip collapse="true"}
+## Quiz answers
+1. **3** — a's two `k=1` rows each match b's single `k=1` (2 rows),
+   plus a's `k=2` survives with `v = NA` (1 row) = 3. Duplicates in the
+   *right* table's key are what explode a join.
+2. 3 rows × 2 cols (name, value) — everything melted
+3. `NA` — left join keeps unmatched left rows with NA fill
+4. 3 columns — bind_rows fills missing columns with NA (unlike rbind, which errors)
+5. TRUE — key "b" survives the anti-join
+:::
+
+## Wrap-up checklist
+
+- [ ] Import reflex: read → peek → check types → check NA handling
+- [ ] I can name the 3 tidy rules and the 3 untidy flavors
+- [ ] `pivot_longer`/`melt` and `pivot_wider`/`pivot` — no notes needed
+- [ ] I always set `validate=` (or audit row counts) on joins
+- [ ] The pandas anti-join idiom `a[~a.key.isin(b.key)]` is muscle memory
+- [ ] I scored 5/5 on the self-quiz
+
+**Tomorrow:** the six verbs — filter, select, arrange, mutate, group, summarise —
+and the pandas method chain that mirrors them.

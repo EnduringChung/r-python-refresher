@@ -1,0 +1,641 @@
+---
+title: "Day 3 — Visualization"
+subtitle: "Week 2 · ggplot2's grammar vs matplotlib's imperative style; the 5 charts that matter"
+---
+
+## Cheat sheet (60 seconds)
+
+| Chart | R (ggplot2) | Python (matplotlib) |
+|---|---|---|
+| scatter | `geom_point()` | `ax.scatter(x, y)` |
+| line | `geom_line()` | `ax.plot(x, y)` |
+| histogram | `geom_histogram(binwidth = 2)` | `ax.hist(x, bins=20)` |
+| box by group | `geom_boxplot(aes(x, y))` | `ax.boxplot([g1, g2, g3])` |
+| bar | `geom_col()` (counted) / `geom_bar()` (auto) | `ax.bar(labels, heights)` |
+| smooth/fit | `geom_smooth(method = "lm")` | `np.polyfit` + `ax.plot` |
+| color by group | `aes(color = grp)` | loop + one `ax.scatter` per group |
+| facets | `facet_wrap(~grp)` | `plt.subplots(nrows, ncols)` |
+| labels | `labs(x =, y =, title =)` | `ax.set_xlabel(...)` etc |
+| flip coords | `coord_flip()` | swap axes / `ax.barh` |
+| save | `ggsave("p.png", plot, dpi = 300)` | `fig.savefig("p.png", dpi=300)` |
+
+## Two philosophies, same picture
+
+**ggplot2 is declarative**: you *declare* what maps to what — data, aesthetic
+mappings, geometry — and the renderer decides pixels. **matplotlib is
+imperative**: you *command* the canvas, step by step. The grammar scales to
+facets and layers with zero extra code; the imperative style scales to
+anything, eventually, with loops. Know both, default to the grammar when the
+figure is "data says what".
+
+```{webr}
+#| label: grammar-r
+library(tidyverse)
+
+genes <- tibble(
+  log2fc  = c(2.1, -1.8, 0.5, 3.0, 0.1, -0.4, 1.2, -2.2, 0.8, 2.5),
+  logp    = c(6.1, 5.2, 0.4, 7.0, 0.1, 0.9, 2.2, 4.8, 1.1, 5.9),
+  sig     = c(TRUE, TRUE, FALSE, TRUE, FALSE, FALSE, FALSE, TRUE, FALSE, TRUE)
+)
+
+ggplot(genes, aes(x = log2fc, y = logp, color = sig)) +
+  geom_point(size = 3, alpha = 0.8) +
+  geom_hline(yintercept = -log10(0.05), linetype = "dashed") +
+  labs(x = "log2 fold change", y = "-log10 p",
+       title = "Volcano plot", color = "padj < 0.05")
+```
+
+```{pyodide}
+#| label: grammar-py
+import matplotlib.pyplot as plt
+
+log2fc = [2.1, -1.8, 0.5, 3.0, 0.1, -0.4, 1.2, -2.2, 0.8, 2.5]
+logp   = [6.1, 5.2, 0.4, 7.0, 0.1, 0.9, 2.2, 4.8, 1.1, 5.9]
+sig    = [True, True, False, True, False, False, False, True, False, True]
+
+fig, ax = plt.subplots()
+for flag, style in [(True, "tab:red"), (False, "tab:gray")]:
+    xs = [x for x, s in zip(log2fc, sig) if s == flag]
+    ys = [y for y, s in zip(logp, sig)   if s == flag]
+    ax.scatter(xs, ys, c=style, s=60, alpha=0.8, label=f"padj<0.05={flag}")
+ax.axhline(-__import__("math").log10(0.05), ls="--", c="k", lw=1)
+ax.set(xlabel="log2 fold change", ylabel="-log10 p", title="Volcano plot")
+ax.legend()
+plt.show()
+```
+
+Same volcano. Count the steps: the R version says *what* (map `sig` to
+color, add a line at the threshold) and stops. The Python version has the
+group-loop and the label bookkeeping spelled out — that code has to exist
+somewhere, and ggplot's price is that you think in **mappings** instead.
+
+## Mapping vs setting — the #1 ggplot mistake
+
+```{webr}
+#| label: mapping-r
+library(tidyverse)
+df <- tibble(x = 1:5, y = c(2, 3, 5, 4, 7), grp = c("A", "A", "B", "B", "B"))
+
+# WRONG (but legal): colors every point red — "red" is a setting
+ggplot(df, aes(x, y, color = "red")) + geom_point()
+
+# RIGHT: color VARIES with grp — a mapping
+ggplot(df, aes(x, y, color = grp)) + geom_point()
+
+# RIGHT differently: setting a constant, outside aes()
+ggplot(df, aes(x, y)) + geom_point(color = "red")
+```
+
+Rule: **inside `aes()` = "this column drives it"; outside `aes()` = "make it
+so"**. If a legend appears when you wanted a constant — you mapped by
+accident. (matplotlib has no such trap; everything is a setting.)
+
+## The 5 charts that matter
+
+Ninety-five percent of bioinformatics reporting is these five. Learn the
+decision rule, then the syntax.
+
+### 1. Scatter — relationship between two continuous variables
+(You just saw it: the volcano is a scatter.)
+
+### 2. Line — a trend over an ordered variable
+
+```{webr}
+#| label: line-r
+library(tidyverse)
+growth <- tibble(
+  hour   = rep(0:4, 2),
+  od     = c(0.05, 0.12, 0.30, 0.72, 1.40, 0.05, 0.09, 0.15, 0.22, 0.30),
+  strain = rep(c("WT", "mutant"), each = 5)
+)
+
+ggplot(growth, aes(hour, od, color = strain)) +
+  geom_line(linewidth = 1) +
+  geom_point() +
+  labs(x = "hours", y = "OD600")
+```
+
+```{pyodide}
+#| label: line-py
+import matplotlib.pyplot as plt
+hours  = [0, 1, 2, 3, 4]
+wt     = [0.05, 0.12, 0.30, 0.72, 1.40]
+mutant = [0.05, 0.09, 0.15, 0.22, 0.30]
+
+fig, ax = plt.subplots()
+ax.plot(hours, wt, "o-", label="WT")
+ax.plot(hours, mutant, "o-", label="mutant")
+ax.set(xlabel="hours", ylabel="OD600")
+ax.legend()
+plt.show()
+```
+
+### 3. Histogram — the shape of one distribution
+
+```{webr}
+#| label: hist-r
+library(tidyverse)
+set.seed(42)
+conc <- round(rlnorm(300, meanlog = log(25), sdlog = 0.6), 2)
+
+ggplot(NULL, aes(conc)) +
+  geom_histogram(binwidth = 10, fill = "steelblue", color = "white") +
+  labs(x = "concentration (ng/uL)", y = "count",
+       title = "Right-skewed — we'll meet this on Day 5")
+```
+
+```{pyodide}
+#| label: hist-py
+import numpy as np, matplotlib.pyplot as plt
+rng = np.random.default_rng(42)
+conc = np.round(rng.lognormal(mean=np.log(25), sigma=0.6, size=300), 2)
+
+fig, ax = plt.subplots()
+ax.hist(conc, bins=np.arange(0, 160, 10), edgecolor="white")
+ax.set(xlabel="concentration (ng/uL)", ylabel="count",
+       title="Right-skewed — we'll meet this on Day 5")
+plt.show()
+```
+
+Both seeded identically in spirit — `set.seed(42)` ↔
+`np.random.default_rng(42)`. Different draws, same shape; the Day 5
+reproducibility thread starts here.
+
+### 4. Box (or violin) — one distribution, split by a group
+
+```{webr}
+#| label: box-r
+library(tidyverse)
+assay <- tibble(
+  treatment = rep(c("control", "treated"), each = 6),
+  conc = c(9, 11, 12, 10, 14, 13, 18, 21, 17, 22, 19, 20)
+)
+
+ggplot(assay, aes(treatment, conc, fill = treatment)) +
+  geom_boxplot(show.legend = FALSE) +
+  labs(x = NULL, y = "concentration (ng/uL)")
+```
+
+```{pyodide}
+#| label: box-py
+import matplotlib.pyplot as plt
+control = [9, 11, 12, 10, 14, 13]
+treated = [18, 21, 17, 22, 19, 20]
+
+fig, ax = plt.subplots()
+ax.boxplot([control, treated])
+ax.set_xticks([1, 2])
+ax.set_xticklabels(["control", "treated"])
+ax.set(ylabel="concentration (ng/uL)")
+plt.show()
+```
+
+::: {.callout-note}
+## The matplotlib boxplot quirk
+`ax.boxplot` takes a **list of arrays**, one per group — no long data frame.
+This is the moment most pandas users reach for seaborn
+(`sns.boxplot(data=df, x="treatment", y="conc")`), which accepts tidy data
+like ggplot. seaborn is one `#| packages: [seaborn]` away in these cells —
+try it:
+
+```{pyodide}
+#| label: seaborn-demo
+#| packages: [seaborn]
+import seaborn as sns
+import matplotlib.pyplot as plt
+assay = __import__("pandas").DataFrame({
+  "treatment": ["control"]*6 + ["treated"]*6,
+  "conc": [9, 11, 12, 10, 14, 13, 18, 21, 17, 22, 19, 20]})
+
+sns.boxplot(data=assay, x="treatment", y="conc", hue="treatment", legend=False)
+plt.show()
+```
+(First run downloads the package — takes a few seconds; needs network.)
+:::
+
+### 5. Bar — comparing counts or summary values
+
+```{webr}
+#| label: bar-r
+library(tidyverse)
+reads <- tibble(sample = c("S1", "S2", "S3"),
+                millions = c(21.0, 4.2, 18.9))
+
+ggplot(reads, aes(sample, millions)) +
+  geom_col(fill = "steelblue") +
+  coord_flip() +
+  labs(x = NULL, y = "reads (millions)")
+```
+
+```{pyodide}
+#| label: bar-py
+import matplotlib.pyplot as plt
+samples  = ["S1", "S2", "S3"]
+millions = [21.0, 4.2, 18.9]
+
+fig, ax = plt.subplots()
+ax.barh(samples, millions, color="steelblue")
+ax.set(xlabel="reads (millions)")
+plt.show()
+```
+
+::: {.callout-warning}
+## `geom_col` vs `geom_bar`, `bar` vs `hist`
+R: `geom_bar()` counts rows for you; `geom_col()` plots values you already
+have. Python: `ax.bar()` plots your heights; `ax.hist()` bins raw data.
+Passing pre-counted data to a counting function (or vice versa) silently
+squares your bars. Also: **bar charts start at 0** (length encodes value);
+*never* use bars for means ± p-values from a baseline far from zero — points
+or boxes instead.
+:::
+
+## Small multiples: facets ↔ subplots
+
+```{webr}
+#| label: facet-r
+library(tidyverse)
+set.seed(1)
+peptides <- tibble(
+  conc = c(rnorm(100, 30, 8), rnorm(100, 20, 6), rnorm(100, 25, 7)),
+  peptide = rep(c("SubP", "Vaso", "Brady"), each = 100)
+)
+
+ggplot(peptides, aes(conc)) +
+  geom_histogram(binwidth = 3, fill = "steelblue", color = "white") +
+  facet_wrap(~ peptide, nrow = 1) +
+  labs(x = "concentration", y = "count")
+```
+
+```{pyodide}
+#| label: facet-py
+import numpy as np, matplotlib.pyplot as plt
+rng = np.random.default_rng(1)
+groups = {"SubP": rng.normal(30, 8, 100),
+          "Vaso": rng.normal(20, 6, 100),
+          "Brady": rng.normal(25, 7, 100)}
+
+fig, axes = plt.subplots(1, 3, sharey=True, figsize=(9, 3))
+for ax, (name, vals) in zip(axes, groups.items()):
+    ax.hist(vals, bins=12, color="steelblue", edgecolor="white")
+    ax.set(title=name, xlabel="conc")
+axes[0].set_ylabel("count")
+plt.show()
+```
+
+One line of R per extra panel (`facet_wrap` re-tiles for any group count);
+matplotlib's loop is fine but the axes bookkeeping is yours. This is the
+grammar's superpower: **the figure structure is derived from the data, not
+hand-built.**
+
+## Making plots honest (both dialects)
+
+::: {.callout-important}
+## The 6-point pre-flight for every report figure
+1. **Axis labels with units** — "conc (ng/uL)", not "conc"
+2. **Title says the finding**, not the variable names
+3. **Bins/widths chosen**, not defaulted (`binwidth`, `bins=`)
+4. **N shown** somewhere — caption or facet title
+5. **Colorblind-safe defaults** — the defaults above are; custom palettes check yours
+6. **One message per plot** — if you need three legends, it's three plots
+:::
+
+Saving for the report: `ggsave("fig1.png", p, width = 6, height = 4, dpi = 300)`
+↔ `fig.savefig("fig1.png", dpi=300, bbox_inches="tight")` — always *before*
+you close/quit the device (`plt.show()` clears nothing, R Studio does — a
+classic blank-PNG mystery).
+
+## Where in-browser plotting stands
+
+| Works live on iPad | Doesn't (yet) |
+|---|---|
+| ggplot2 in `{webr}` cells ✓ | plotly interactivity |
+| base R `plot()` ✓ | complex patched layouts |
+| matplotlib in `{pyodide}` cells ✓ | plotnine (micropip only, slow install) |
+| seaborn via micropip ✓ | — |
+
+plotnine is literally ggplot syntax in Python
+(`(ggplot(df, aes("x", "y")) + geom_point())`) — handy as a bridge, but it
+installs on demand and is heavy; for the course, matplotlib fluency + the
+grammar *vocabulary* is the durable combo.
+
+## Drills (live pad)
+
+```{webr}
+#| label: drills
+library(tidyverse)
+df <- tibble(x = 1:20, y = (1:20)^2, grp = rep(c("A", "B"), 10))
+
+# 1. Scatter of x vs y — then color it by grp. Which version creates a legend?
+
+# 2. Line plot of x vs y — what does it look like? Why is a line the WRONG
+#    geom for this data?
+
+# 3. Histogram of y with binwidth 20
+
+# 4. Boxplot of y split by grp
+
+# 5. Bar plot of mean(y) per grp (hint: compute first, then geom_col)
+
+# 6. Same scatter as 1 but with facets instead of colors
+
+# 7. Add a smoothed trend to scatter 1: geom_smooth() — what method by default?
+
+# 8. Make plot 1 publishable: labels + title in one chain
+```
+
+::: {.callout-tip collapse="true"}
+## Expected answers
+1. `aes(color = grp)` (mapping) makes the legend; `color = "red"` (setting) doesn't
+2. A jagged zig-zag — lines imply ordered continuity; x here is categorical-ish identity
+3. `ggplot(df, aes(y)) + geom_histogram(binwidth = 20)`
+4. `ggplot(df, aes(grp, y)) + geom_boxplot()`
+5. `df |> group_by(grp) |> summarise(m = mean(y)) |>
+   ggplot(aes(grp, m)) + geom_col()`
+6. `+ facet_wrap(~grp)` — same data, side-by-side panels
+7. loess by default under n = 1000 (`method = "lm"` for a straight fit)
+8. `+ labs(x = "...", y = "...", title = "...")`
+:::
+
+## Python drills (live pad)
+
+```{pyodide}
+#| label: drills-py
+import matplotlib.pyplot as plt
+import numpy as np
+x = np.arange(1, 21)
+y = x ** 2
+grp = np.array(list("AB") * 10)
+
+# 1. fig, ax = plt.subplots() — scatter colored by grp (two .scatter calls
+#    or one with c=grp) — which approach gives a legend for free?
+
+# 2. ax.plot(x, y) — same zig-zag problem as R?
+
+# 3. ax.hist(y, bins=...)
+
+# 4. ax.boxplot([y[grp == "A"], y[grp == "B"]])
+
+# 5. Bar of mean(y) per group — compute, then ax.bar
+
+# 6. Two subplots side by side (1 row, 2 cols), one histogram per group —
+#    notice the manual loop ggplot's facet_wrap replaces
+
+# 7. Save your favorite: fig.savefig(...) — check the file exists in the
+#    virtual FS: import os; os.listdir(".")
+```
+
+::: {.callout-tip collapse="true"}
+## Expected answers (Python)
+1. Two calls with `label=` then `ax.legend()` — matplotlib never auto-legends
+2. Yes — geometry advice is language-independent
+4. `ax.set_xticks([1, 2]); ax.set_xticklabels(["A", "B"])` to name the boxes
+5. `means = [y[grp == g].mean() for g in "AB"]` then `ax.bar(["A", "B"], means)`
+6. `fig, axes = plt.subplots(1, 2); for ax, g in zip(axes, "AB"): ax.hist(y[grp == g])`
+:::
+
+## Exercises
+
+### Exercise 1 — fix the mapped accident
+
+This plot shows a legend nobody wants. Fix it so points are steelblue,
+constant.
+
+```{webr}
+#| exercise: ex-d3-mapping
+library(tidyverse)
+df <- tibble(x = 1:10, y = (1:10) + rnorm(10))
+
+ggplot(df, aes(x, y, color = "steelblue")) +
+  geom_point(size = 3)
+```
+
+::: {.hint exercise="ex-d3-mapping"}
+Move the color out of `aes()` — into `geom_point()`.
+:::
+
+::: {.solution exercise="ex-d3-mapping"}
+```r
+ggplot(df, aes(x, y)) +
+  geom_point(size = 3, color = "steelblue")
+```
+:::
+
+### Exercise 2 — from long data to faceted histograms
+
+```{webr}
+#| exercise: ex-d3-facet
+library(tidyverse)
+set.seed(7)
+long <- tibble(
+  conc    = c(rnorm(80, 30, 5), rnorm(80, 22, 5), rnorm(80, 26, 5)),
+  peptide = rep(c("SubP", "Vaso", "Brady"), each = 80)
+)
+
+# one histogram per peptide, sharing the x scale, 3 rows
+______
+```
+
+::: {.hint exercise="ex-d3-facet"}
+`facet_wrap(~ peptide, ncol = 1)`.
+:::
+
+::: {.solution exercise="ex-d3-facet"}
+```r
+ggplot(long, aes(conc)) +
+  geom_histogram(binwidth = 3, fill = "steelblue", color = "white") +
+  facet_wrap(~ peptide, ncol = 1)
+# shared scales are the default (fixed); scales = "free" would UN-share them
+```
+:::
+
+### Exercise 3 — the Python twin
+
+Same data, one figure, 3 stacked subplots, shared x-range:
+
+```{pyodide}
+#| exercise: ex-d3-facet-py
+import numpy as np, matplotlib.pyplot as plt
+rng = np.random.default_rng(7)
+groups = {"SubP": rng.normal(30, 5, 80),
+          "Vaso": rng.normal(22, 5, 80),
+          "Brady": rng.normal(26, 5, 80)}
+
+______
+```
+
+::: {.hint exercise="ex-d3-facet-py"}
+`plt.subplots(3, 1, sharex=True, figsize=(6, 7))` then loop `zip`.
+:::
+
+::: {.solution exercise="ex-d3-facet-py"}
+```python
+fig, axes = plt.subplots(3, 1, sharex=True, figsize=(6, 7))
+for ax, (name, vals) in zip(axes, groups.items()):
+    ax.hist(vals, bins=12, color="steelblue", edgecolor="white")
+    ax.set(title=name)
+plt.show()
+```
+:::
+
+### Exercise 4 — scatter with a fitted line, both dialects
+
+Add a linear fit to the scatter of `hours` vs `od`. R gets `geom_smooth` for
+free — Python needs two lines of `polyfit`.
+
+```{webr}
+#| exercise: ex-d3-smooth
+library(tidyverse)
+od <- tibble(hour = 0:4,
+             od   = c(0.05, 0.12, 0.30, 0.72, 1.40))
+
+ggplot(od, aes(hour, od)) +
+  geom_point() +
+  ______     # add the linear smooth with its confidence band
+```
+
+::: {.hint exercise="ex-d3-smooth"}
+`geom_smooth(method = "lm")`.
+:::
+
+::: {.solution exercise="ex-d3-smooth"}
+```r
+ggplot(od, aes(hour, od)) +
+  geom_point() +
+  geom_smooth(method = "lm")
+# exponential-looking growth — a straight line underfits; try
+# geom_smooth(method = "lm", formula = y ~ log(x)) and compare
+```
+:::
+
+```{pyodide}
+#| exercise: ex-d3-smooth-py
+import numpy as np, matplotlib.pyplot as plt
+hours = np.arange(0, 5)
+od    = np.array([0.05, 0.12, 0.30, 0.72, 1.40])
+
+fig, ax = plt.subplots()
+ax.scatter(hours, od)
+# fit a line: slope, intercept = np.polyfit(hours, od, 1), then plot it
+______
+```
+
+::: {.hint exercise="ex-d3-smooth-py"}
+`np.polyfit(x, y, 1)` returns `[slope, intercept]`.
+:::
+
+::: {.solution exercise="ex-d3-smooth-py"}
+```python
+slope, intercept = np.polyfit(hours, od, 1)
+ax.plot(hours, slope * hours + intercept, "r--")
+ax.set(xlabel="hour", ylabel="OD600")
+plt.show()
+```
+:::
+
+### Exercise 5 — the publishable rescue
+
+This plot has four problems from the pre-flight list. Name them, then fix
+them (R; the fixes transfer 1:1).
+
+```{webr}
+#| exercise: ex-d3-rescue
+library(tidyverse)
+dat <- tibble(
+  group = rep(c("ctrl", "low", "high"), each = 30),
+  val   = c(rnorm(30, 10), rnorm(30, 11), rnorm(30, 12))
+)
+
+ggplot(dat, aes(group, val)) +
+  geom_point()
+```
+
+::: {.hint exercise="ex-d3-rescue"}
+No labels; meaningless point cloud where a summary would do; group order is
+alphabetical not meaningful; no sense of n.
+:::
+
+::: {.solution exercise="ex-d3-rescue"}
+```r
+ggplot(dat, aes(factor(group, c("ctrl", "low", "high")), val)) +
+  geom_boxplot(fill = "grey90", outlier.alpha = 0.4) +
+  labs(x = "dose group", y = "value (units)",
+       title = "Value increases with dose",
+       subtitle = paste0("n = ", nrow(dat), ", 10 per group"))
+# fixes: ordered x, box shows distribution, real labels, n in subtitle
+```
+:::
+
+## Common pitfalls (real ones)
+
+::: {.callout-warning}
+## 1. The default-plot trap in loops
+Building figures inside a `for` loop without `fig, ax = plt.subplots()` (or
+R's `print(p)` inside loops/functions) produces either 30 overlapping
+figures or blank output. R: ggplots **must be printed** in loops/functions —
+auto-printing is a top-level-only kindness. Python: create axes explicitly,
+always.
+:::
+
+::: {.callout-warning}
+## 2. Histogram bin-count lies
+The same data with `bins=5` vs `bins=50` tells opposite stories. Never
+publish a default histogram; pick `binwidth` from the data's scale and say
+so in the caption.
+:::
+
+::: {.callout-warning}
+## 3. Dual y-axes
+Seems efficient, secretly partisan: each axis is scaled independently, so
+you choose the crossing point. If two series need one canvas, facet or
+normalize — don't dual-axis.
+:::
+
+## Self-quiz — predict the output
+
+```{webr}
+#| label: quiz
+library(tidyverse)
+df <- tibble(x = c(1, 2, 3, 4), y = c(2, 4, 5, 9), g = c("a", "a", "b", "b"))
+
+# Q1: how many points, and what colors?
+ggplot(df, aes(x, y, color = g)) + geom_point()
+
+# Q2: how many points, and what colors?
+ggplot(df, aes(x, y), color = "blue") + geom_point()
+
+# Q3: what does this render — points, line, or both?
+ggplot(df, aes(x, y)) + geom_point() + geom_line()
+
+# Q4: how many panels?
+ggplot(df, aes(x, y)) + geom_point() + facet_wrap(~g)
+
+# Q5: does this error?
+ggplot(df, aes(x, y)) + geom_histogram()
+```
+
+::: {.callout-tip collapse="true"}
+## Quiz answers
+1. 4 points, 2 colors + a legend — mapped
+2. 4 blue points, no legend — set... actually: setting outside `aes()` at
+   the plot level does nothing to geoms here; points render with the default
+   color and no legend. The fix is `geom_point(color = "blue")`
+3. Both — geoms stack; order = drawing order
+4. 2 — one per level of g
+5. No — it runs and bins `y` (the only aesthetic); a warningless histogram
+   of the wrong variable is worse than an error. Read your x-axis.
+:::
+
+## Wrap-up checklist
+
+- [ ] Mapping (inside `aes`) vs setting (outside) — and which one makes legends
+- [ ] The 5 charts and when each is the honest choice
+- [ ] `facet_wrap` ↔ `plt.subplots` — and why the grammar scales better
+- [ ] Every report figure: labeled axes, chosen bins, n somewhere
+- [ ] `ggsave`/`savefig` habits — size and dpi decided on purpose
+- [ ] I scored 5/5 on the self-quiz
+
+**Tomorrow:** Algorithm Gym #2 — two pointers, sliding windows, and prefix
+sums, with a bioinformatics twist.
+
+**Day 5 preview:** the concentration data you just histogrammed is
+*log-normal* — Day 5's tests care about that a lot.

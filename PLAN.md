@@ -194,9 +194,12 @@ R and Python Refresher/
 
 ## 9. Remaining build queue
 
-- [ ] **Week 2**: wrangling grammar, ggplot2↔matplotlib, statistics + Project 2 (Quarto report) — at §8 standard
-- [ ] **Week 3**: Python OOP/architecture, repro stack (renv/uv/git/tests), Algorithm Gym #3, Project 3 (bioseqkit R+Python packages with CI)
-- [ ] **Week 4**: tidymodels↔sklearn, classifiers/evaluation, sequences (Biopython/pysam live), DESeq2/edgeR frozen lessons, Algorithm Gym #4, Project 4
-- [ ] **Week 5**: single-cell (Colab badges), trajectories/pseudotime, HMMs from scratch, multi-omics, capstone
-- [ ] Master cheat-sheet index page (`cheatsheets/`)
+- [ ] **Week 2**: wrangling grammar, ggplot2↔matplotlib, statistics + Project 2 (Quarto report) — at §8 standard *(assigned to parallel builder)*
+- [x] Master cheat-sheet index page (`cheatsheets/index.qmd`)
+- [x] Print CSS (`styles.css` @media print)
+- [x] Project 3 scaffolding: `projects/p3/bioseqkitr` (R pkg, installs, gc tests green) + `projects/p3/bioseqkit_py` (pytest green, stubs skip-marked) + `.github/workflows/bioseqkit.yml` CI (runs on `projects/p3/**` changes)
+- [x] Week 4 RNA-seq plumbing: `scripts/rnaseq/` — synthetic counts (seed 2024), DESeq2 + edgeR scripts **run and outputs committed** (40 sig genes, 39/40 planted recovered by both), PyDESeq2 script authored (needs `pip install pydeseq2` locally to generate its output)
+- [ ] **Week 3 content**: OOP/architecture lessons, repro stack, Algorithm Gym #3, W3D5 lesson wiring up the p3 scaffold (unskip tests → CI green)
+- [ ] **Week 4 content**: ML lessons, sequences, frozen DESeq2/edgeR lessons embedding `scripts/rnaseq/output/` artifacts, Algorithm Gym #4, Project 4
+- [ ] **Week 5 content**: single-cell (Colab badges), trajectories/pseudotime, HMMs from scratch, multi-omics, capstone
 - [ ] Consider Posit Cloud path for R-Bioconductor lessons on iPad (open decision)

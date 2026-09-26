@@ -1,0 +1,13 @@
+Package: bioseqkit
+Title: Tiny Sequence Utilities for the R + Python Refresher Course
+Version: 0.1.0
+Authors@R: person("Course", "Learner", email = "learner@example.com",
+    role = c("aut", "cre"))
+Description: Educational package implementing three sequence utilities
+    (reverse-complement, GC content, k-mer counts) twice on purpose:
+    once in R, once in Python, with identical results.
+License: MIT
+Encoding: UTF-8
+Suggests:
+    testthat (>= 3.0.0)
+Config/testthat/edition: 3

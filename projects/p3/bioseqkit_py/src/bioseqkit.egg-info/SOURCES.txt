@@ -1,0 +1,12 @@
+pyproject.toml
+src/bioseqkit/__init__.py
+src/bioseqkit/gc.py
+src/bioseqkit/kmers.py
+src/bioseqkit/revcomp.py
+src/bioseqkit.egg-info/PKG-INFO
+src/bioseqkit.egg-info/SOURCES.txt
+src/bioseqkit.egg-info/dependency_links.txt
+src/bioseqkit.egg-info/top_level.txt
+tests/test_gc.py
+tests/test_kmers.py
+tests/test_revcomp.py

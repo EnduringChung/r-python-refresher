@@ -1,0 +1,3 @@
+export(rev_comp)
+export(gc_content)
+export(kmer_counts)

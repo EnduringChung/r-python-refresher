@@ -6,3 +6,47 @@
 details > summary {
   cursor: pointer;
 }
+
+/* ---- Print / PDF export ---- */
+@media print {
+  /* navigation chrome */
+  .navbar,
+  .sidebar,
+  .page-navigation,
+  .code-copy-button,
+  .quarto-code-tools,
+  .code-tools-button,
+  .btn,
+  .toc-actions,
+  #quarto-back-to-top {
+    display: none !important;
+  }
+
+  /* live-cell toolbars/buttons keep code, drop chrome */
+  .quarto-live .cell-toolbar,
+  .quarto-live .lm-Widget p-button,
+  .quarto-live button {
+    display: none !important;
+  }
+
+  /* give revealed solutions/hints a fighting chance */
+  details[open] .cell-output,
+  .callout {
+    break-inside: avoid;
+  }
+
+  /* tables split cleanly */
+  table,
+  pre {
+    break-inside: avoid;
+  }
+
+  body {
+    font-size: 11pt;
+  }
+
+  a {
+    text-decoration: none;
+    color: inherit;
+  }
+}
