@@ -175,6 +175,25 @@ R and Python Refresher/
 3. R `identical()` is type-strict (`c(2,3)` vs `c(2L,3L)` fails) — use `all.equal()` for numeric comparisons in tests
 4. After every recode/factor relevel: count NAs (the `CTRL` → `"ctrl"` → NA class of bug)
 
+### Exercise self-sufficiency rule (added after the W4/W5 NameError reports)
+
+Every exercise cell MUST be runnable on a freshly-loaded page, without
+running any lesson cell first. Quarto-live executes exercise code in its own
+environment — lesson state does not carry over. For each exercise add a
+**setup cell** immediately before it:
+
+    ```{pyodide}
+    #| setup: true
+    #| exercise: <key>
+    <reload data, rebuild splits/models the exercise needs>
+    ```
+
+- Setup cells re-run before every learner evaluation (fast: data loads in
+  <1 s, small model fits a few seconds — keep them lean)
+- Drill pads and quizzes: prefer comment prompts or inline definitions;
+  never reference lesson variables in executable lines
+- Verify by extracting and running each setup standalone (see §verification)
+
 ### Quarto Live syntax facts (learned the hard way)
 
 - `.hint`/`.solution` divs MUST carry `exercise="key"`; solution code inside is a **static** fenced block, not a cell
