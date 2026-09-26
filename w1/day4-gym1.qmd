@@ -10,6 +10,8 @@ subtitle: "Week 1 · Learning to *think* before typing, in both dialects"
 3. Every problem solved **twice** — R and Python — because idiom-building is the point
 
 Gym problems are small on purpose. Struggle 10–15 minutes before peeking.
+LeetCode-tier interviews mostly ask easy/medium array-string problems; this
+track gets you there in four weeks.
 :::
 
 ## The 4-step method (use it forever)
@@ -18,6 +20,12 @@ Gym problems are small on purpose. Struggle 10–15 minutes before peeking.
 2. **Brute force** it out loud — "nested loops, O(n²)"
 3. **Name the bottleneck** — usually "I keep re-searching a list"
 4. **Reach for a hash map** — trading memory for instant lookup, O(n)
+
+Worked application, Two-Sum: *restate — find two values summing to target;
+brute force — every pair i<j, O(n²); bottleneck — for each x I re-scan the
+array asking "is target−x here?"; hash map — remember everything seen so
+far, ask the map instead of the array. One pass, O(n) time, O(n) space.*
+That paragraph is the thinking; the code below is just transcription.
 
 ## Big-O in 90 seconds
 
@@ -31,6 +39,30 @@ Gym problems are small on purpose. Struggle 10–15 minutes before peeking.
 
 Rules of thumb: nested loops over the same n → multiply (`n²`).
 Sequential loops → add (`O(n + n) = O(n)`). Sorting is n log n.
+**Big-O describes growth, not seconds** — an O(n²) over n=10 beats an O(n)
+over n=10 million any day; know your n (scRNA-seq: n = tens of thousands of
+cells × tens of thousands of genes — O(n²) cell-pair loops are why
+naive clustering code crashes).
+
+## Reading complexity: the real interview skill
+
+```r
+# a) O(n)  — one pass
+total <- 0; for (v in x) total <- total + v
+
+# b) O(n²) — for each element, re-scan everything
+for (i in seq_along(x)) for (j in seq_along(x)) check(x[i], x[j])
+
+# c) O(n log n) — sort then one pass
+o <- order(x); check_pairs(x[o])
+
+# d) O(n) inside O(n) = O(n²) disguised: %in% inside a loop!
+for (v in xs) if (v %in% big) hit()      # %in% is a full scan each time
+```
+
+That last one is the most common **bioinformatics R performance bug**:
+`%in%`/`match()` inside a loop over thousands of genes. Pull the loop
+inside-out — one vectorized `match(all_genes, wanted)` — and it's O(n).
 
 ## R's hash tools (no dict literal, same idea)
 
@@ -38,7 +70,7 @@ R has no `{}` dict, but these are all hash-backed:
 
 | Tool | Job |
 |---|---|
-| `match(x, table)` | first position of each `x` in `table` (O(1)-ish lookup) |
+| `match(x, table)` | first position of each `x` in `table` |
 | `%in%` | membership → TRUE/FALSE |
 | `anyDuplicated(x)` | >0 means "has a duplicate" — stops early! |
 | `unique(x)`, `duplicated(x)` | dedupe / mark 2nd+ occurrences |
@@ -51,8 +83,9 @@ Python equivalents: `dict`, `set`, `collections.Counter`, `in`.
 
 > Given `nums` and `target`, return the two numbers that add to `target`.
 
-4-step: brute force = all pairs, O(n²). Bottleneck: "for each x, I re-search
-for target−x." So put seen numbers in a hash map and ask it instead. O(n).
+The map holds **values seen so far → their positions**. Check for the
+partner *before* inserting today's value — that ordering is what makes
+duplicates and "don't pair with yourself" work out.
 
 ```{webr}
 #| label: twosum-r
@@ -63,7 +96,7 @@ two_sum <- function(nums, target) {
     if (partner %in% names(seen)) {
       return(c(nums[seen[[as.character(partner)]]], nums[i]))
     }
-    seen[[as.character(nums[i])]] <- i  # add AFTER checking (handles dupes)
+    seen[[as.character(nums[i])]] <- i  # add AFTER checking
   }
   NULL
 }
@@ -94,7 +127,7 @@ the partner you need.**
 #| label: dup-r
 has_duplicate <- function(x) anyDuplicated(x) > 0
 
-has_duplicate(c(1, 2, 3, 2))   # TRUE — and it stops at the first dup
+has_duplicate(c(1, 2, 3, 2))   # TRUE — stops at the first dup
 ```
 
 ```python
@@ -103,6 +136,9 @@ def has_duplicate(x):
 
 has_duplicate([1, 2, 3, 2])    # True
 ```
+
+Two idioms, same O(n). Note what you'd NOT write: `sum(duplicated(x)) > 0`
+is fine, but `for i, for j, x[i]==x[j]` is the O(n²) reflex we're un-training.
 
 ## Problem 3 — First Recurring Character
 
@@ -114,7 +150,7 @@ first_recurring <- function(s) {
   if (length(dup_idx) == 0) NULL else chars[dup_idx[1]]
 }
 
-first_recurring("abba")
+first_recurring("abba")     # "b" — b repeats at position 3, before a's repeat
 ```
 
 ```python
@@ -128,6 +164,10 @@ def first_recurring(s):
 
 first_recurring("abba")    # 'b' — it recurs at position 3, before 'a' repeats
 ```
+
+Same answer by different machinery: R marks duplicates in one vectorized
+pass then reports the earliest; Python walks once with a set. Compare the
+*shapes* — R thinks in whole-vector operations, Python in an explicit loop.
 
 ## Problem 4 — Valid Anagram (count, don't sort)
 
@@ -152,10 +192,17 @@ def is_anagram(a, b):
 is_anagram("Listen", "Silent")
 ```
 
+::: {.callout-tip}
+## Counter's superpower R's table lacks
+`Counter("abc")["z"]` returns `0` — missing keys are free.
+R's `table()["z"]` returns `NA`. Counting problems in R need the extra
+guard: `if ("z" %in% names(freq))`.
+:::
+
 ## Problem 5 — Missing Number
 
 > `0..n` with one missing, find it. Math beats any data structure: expected
-> sum minus actual sum. O(n), O(1) space.
+> sum minus actual sum. O(n) time, O(1) space.
 
 ```{webr}
 #| label: missing-r
@@ -175,6 +222,48 @@ def missing_number(nums):
 missing_number([0, 1, 3, 4, 5])    # 2
 ```
 
+Lesson: the *fourth* step of the method isn't always a hash map — it's "is
+there a mathematical identity that replaces the search?" Sums, products,
+XOR (for the bitwise-inclined), counting sort.
+
+## Problem 6 — Best Time to Buy & Sell (one-pass max)
+
+> One array of daily prices, one buy then one later sell — maximize profit.
+
+Brute force: every pair, O(n²). Insight: the best sell for each day pairs
+with the *cheapest day before it* — so track `min_so_far` and the best
+`profit` in a single pass. O(n).
+
+```{webr}
+#| label: profit-r
+max_profit <- function(prices) {
+  best <- 0
+  min_so_far <- prices[1]
+  for (p in prices[-1]) {
+    best <- max(best, p - min_so_far)
+    min_so_far <- min(min_so_far, p)
+  }
+  best
+}
+
+max_profit(c(7, 1, 5, 3, 6, 4))
+```
+
+```python
+def max_profit(prices):
+    best = 0
+    min_so_far = prices[0]
+    for p in prices[1:]:
+        best = max(best, p - min_so_far)
+        min_so_far = min(min_so_far, p)
+    return best
+
+max_profit([7, 1, 5, 3, 6, 4])    # 5  (buy 1, sell 6)
+```
+
+**Running-minimum + best-so-far** is a core pattern; it returns as "kadane's
+algorithm" and as fold-change QC logic in genomics.
+
 ## Drills (live pad)
 
 ```{webr}
@@ -183,20 +272,44 @@ missing_number([0, 1, 3, 4, 5])    # 2
 
 # 2. Which elements of c("a","x","b") appear in c("x","b","q")? (one call)
 
-# 3. table() the letters of "mississippi" — which letter is most common?
+# 3. table() the letters of "mississippi" — which letters are most common?
 
 # 4. For target = 10 and c(3, 7, 5, 5), what does two_sum() return? Predict!
 
 # 5. Intersection of c(1,2,2,3) and c(2,2,4) — unique shared values
+
+# 6. Complexity of: sum(x %in% y) — one call, no loop?
+
+# 7. max_profit(c(2, 10, 1, 3)) — predict, then run
+
+# 8. names(table(c("a","b","a")))[table(c("a","b","a")) == 2] — predict!
+
+# 9. missing_number(c(1, 2, 0, 4)) — predict
+
+# 10. A nested loop runs 1000 × 1000 iterations; how many in big-O speak?
+
+# 11. What's O(1) about names(seen) membership but O(n) about x %in% y? 
+#     (trick: R named-vector lookup vs scan — think about which is which)
+
+# 12. Reverse c(1,2,3) three ways: rev(), bracket indexing, and a loop
 ```
 
 ::: {.callout-tip collapse="true"}
 ## Expected answers
 1. `anyDuplicated(c(3,5,5,1)) > 0`
 2. `c("a","x","b") %in% c("x","b","q")` (positions) — or `intersect()`
-3. `table(strsplit("mississippi","")[[1]])` — "i" and "s", 4 each
+3. "i" and "s", 4 each
 4. `c(3, 7)` — the pair check happens before inserting 3; then 7 finds 3
 5. `intersect(c(1,2,2,3), c(2,2,4))`
+6. O(n·m) technically (scan y per x), O(n) if y is hashed — R's `%in%` hashes
+   the table, so effectively linear in length(x)
+7. `8` (buy 2, sell 10) — the later cheap 1 can't pair with an earlier sell
+8. `c("a")` — names filtered by counts == 2
+9. `3` — n=4 → 4·5/2=10 minus sum(1+2+0+4)=7 → 3
+10. O(n²) with n=1000 — a million pair-checks
+11. `seen[[name]]` lookups hash the names; `%in%` scans — same symbol, 
+    different cost. In R use named vectors/dupes-detection instead of scanning
+12. `rev(x)` · `x[length(x):1]` · loop with `x[n - i + 1]`
 :::
 
 ## Exercises
@@ -294,11 +407,135 @@ two_sum_pos <- function(nums, target) {
 ```
 :::
 
+### Exercise 4 — contains-nearby-duplicate (map + window)
+
+Return TRUE if the same value appears within `k` positions of itself.
+("nearby duplicates" — a real sequencing QC question: same barcode twice
+within k reads?) Hash map of value → last position; compare gaps.
+
+```{webr}
+#| exercise: ex-d4-nearby
+contains_nearby <- function(nums, k) {
+  ______
+}
+
+contains_nearby(c(1, 2, 3, 1), 3)   # TRUE  (gap of 3 <= k)
+contains_nearby(c(1, 2, 3, 1), 2)   # FALSE (gap of 3 > k)
+```
+
+::: {.hint exercise="ex-d4-nearby"}
+Keep `last_pos` as a named hash. For each value: if seen and `i - last <= k`
+return TRUE; then update `last_pos`. O(n).
+:::
+
+::: {.solution exercise="ex-d4-nearby"}
+```r
+contains_nearby <- function(nums, k) {
+  last_pos <- integer(0)
+  for (i in seq_along(nums)) {
+    key <- as.character(nums[i])
+    if (key %in% names(last_pos) && i - last_pos[[key]] <= k) return(TRUE)
+    last_pos[[key]] <- i
+  }
+  FALSE
+}
+```
+:::
+
+### Exercise 5 — character frequency > 1 (Python)
+
+```{pyodide}
+#| exercise: ex-d4-freq-py
+from collections import Counter
+
+def repeated_chars(s):
+    """Return a list of characters appearing 2+ times, in first-appearance order."""
+    ______
+
+print(repeated_chars("mississippi"))   # ['i', 's', 'p']
+```
+
+::: {.hint exercise="ex-d4-freq-py"}
+Build `Counter(s)`, then walk `s` (not the counter!) and collect chars with
+`count >= 2`, skipping already-collected ones — or use a seen-set.
+:::
+
+::: {.solution exercise="ex-d4-freq-py"}
+```python
+from collections import Counter
+
+def repeated_chars(s):
+    counts = Counter(s)
+    out, seen = [], set()
+    for ch in s:
+        if counts[ch] >= 2 and ch not in seen:
+            out.append(ch)
+            seen.add(ch)
+    return out
+```
+:::
+
+## Common pitfalls (real ones)
+
+::: {.callout-warning}
+## 1. `%in%` inside loops
+`for (g in genes) if (g %in% blacklist)` re-scans `blacklist` per gene —
+O(n·m). Vectorize: `genes[genes %in% blacklist]` — one call.
+:::
+
+::: {.callout-warning}
+## 2. Check-then-insert ordering in Two-Sum
+Insert *before* checking and `[5, 5]` with target 10 "pairs" 5 with itself.
+Check partner first, insert after.
+:::
+
+::: {.callout-warning}
+## 3. `table()` on missing levels
+`table(c("a","b"))["z"]` is `NA`, not 0 — guard with `%in% names(...)`.
+Python's `Counter` returns 0; R's `table` returns NA. Neither errors — both
+flow silently into your logic.
+:::
+
+## Self-quiz — predict the output
+
+```{webr}
+#| label: quiz
+# Q1: what prints?
+x <- c(3, 1, 3, 2, 1)
+names(table(x))[table(x) == max(table(x))]
+
+# Q2: what prints, and what's the complexity?
+anyDuplicated(c(1, 2, 3, 4, 3))
+
+# Q3: what prints?
+two_sum(c(5, 5), 10)
+
+# Q4: trap — what prints?
+length(unique(c(NA, NA, 1)))
+
+# Q5: what prints?
+max_profit(c(9, 8, 7, 6))
+```
+
+::: {.callout-tip collapse="true"}
+## Quiz answers
+1. `"1" "3"` — both appear twice; table order is by value
+2. `5` (position of the first duplicate) — early-stops, so *best case* O(1),
+   worst O(n)
+3. `5 5` — the check-first ordering makes pairing-with-self impossible: when
+   scanning the second 5, partner 5 is already in `seen`
+4. `2` — NA counts as a unique value (twice!). Real missing-data bug:
+   dedupe should usually run after NA handling
+5. `0` — prices only fall, so best stays 0 (never a negative profit)
+:::
+
 ## Wrap-up checklist
 
 - [ ] I restate → brute force → name bottleneck → hash map, before typing
 - [ ] I know R's hash family: `match`, `%in%`, `table`, `unique`, `anyDuplicated`
 - [ ] "Seen so far" dict/set is THE pattern for pair-finding problems
 - [ ] Counting (`table`/`Counter`) beats sorting for comparison problems
+- [ ] Running-extremum (min-so-far/best-so-far) handles one-pass max problems
+- [ ] I scored 5/5 on the self-quiz
 
 **Tomorrow:** strings, factors, dates — and Project 1.

@@ -15,8 +15,13 @@ subtitle: "Week 1 · if as a value, `case_when`, `...` vs `*args`, guards & clos
 | any extra args | `f(...)` | `*args, **kwargs` |
 | raise error | `stop("msg")` | `raise ValueError("msg")` |
 | check inputs | `stopifnot(...)` | `assert` / explicit `if` |
+| named guard messages | `stopifnot("msg" = cond)` | `assert cond, "msg"` |
 
 ## `if` is a value in R (a superpower)
+
+In R, `if` is not a *statement* — it's an **expression** that returns a
+value, like everything else in the language. You can assign it, put it in a
+`mutate()`, pass it to a function:
 
 ```{webr}
 #| label: ifvalue
@@ -24,6 +29,15 @@ score <- 87
 
 grade  <- if (score > 90) "A" else "B"     # the if EXPRESSION returns a value
 grade
+
+status <- if (score > 90) {
+  "A"                    # braces also return their last expression
+} else if (score > 80) {
+  "B"
+} else {
+  "C"
+}
+status
 ```
 
 In Python the same idea is the ternary:
@@ -32,6 +46,10 @@ In Python the same idea is the ternary:
 score = 87
 grade = "A" if score > 90 else "B"
 ```
+
+Where this matters daily: inside `mutate()`, `if_else()` *is* the value-form
+of `if` applied to whole columns. Scalar `if` for single decisions,
+`if_else`/`case_when` for vectors — never the reverse.
 
 ## Vectorized branching: the workhorse
 
@@ -50,7 +68,11 @@ tibble(pvalue = c(1e-12, 0.03, 0.2, 0.7)) |>
   ))
 ```
 
-`case_when` is evaluated top-down, first match wins — like a tidy `elif` chain.
+`case_when` is evaluated **top-down, first match wins** — exactly like an
+`elif` chain, which is why *ordering is logic*: swapping the first two rows
+would break the significance ladder. Unmatched values (and `NA` conditions)
+fall through to `.default`; if you skip `.default`, unmatched rows become
+`NA` — count them when you test.
 
 ```python
 import numpy as np, pandas as pd
@@ -80,15 +102,30 @@ v <- c()
 seq_along(v)   # empty — the loop body never runs. Correct tool.
 ```
 
-Legit loop uses: iterative algorithms (MCMC, EM), `while` until convergence,
-side-effects across files. **Transformation → vectorize / map. Iteration
-with memory → loop.**
+Legit loop uses: **iterative algorithms with memory** (MCMC chains, EM
+iterations, Gibbs samplers), `while` until convergence, side-effects across
+files. The decision rule:
+
+> Transformation → vectorize / map. Iteration where each step *needs the
+> previous step's result* → loop.
+
+```{webr}
+#| label: loop-ok
+# A legitimate loop: each value needs the previous one
+x <- numeric(10); x[1] <- 1
+for (i in 2:10) x[i] <- 0.5 * x[i - 1] + 1
+round(x, 3)
+```
 
 ```python
 # Python: empty-range loops just don't run — no 1:0 trap
 v = []
 for i in range(len(v)):   # zero iterations
     print(v[i])
+
+# the same legit loop, pythonic version
+import itertools
+xs = list(itertools.accumulate(range(10), lambda acc, _: 0.5 * acc + 1, initial=1))[1:]
 ```
 
 ## Functions that don't embarrass you
@@ -113,9 +150,15 @@ log2fc(c(32, 8), c(2, 2))
 log2fc("oops", 2)   # error message a human can read
 ```
 
-Anatomy: **roxygen comment → guard clauses → one job → explicit return of
-the last expression.** Guards turn cryptic downstream failures into
-immediate, named ones — this is 80% of "robust code".
+Anatomy, top to bottom: **roxygen comment → guard clauses → one job →
+last expression is the return value.** Guards turn cryptic downstream
+failures ("non-numeric argument to binary operator", nine frames deep) into
+immediate, named ones at the source — this is 80% of "robust code", and it
+costs three lines.
+
+Why name the conditions? Unnamed `stopifnot()` just prints the *call* that
+failed — useless for anyone who didn't write it. Named conditions print the
+message you wrote.
 
 ```python
 import numpy as np
@@ -128,12 +171,15 @@ def log2fc(treat, ctrl, pseudo=1):
     return np.log2((treat + pseudo) / (ctrl + pseudo))
 ```
 
+Python's `assert` is *not* the same tool: asserts vanish under `python -O`
+(optimized mode). For validation that must always run, use explicit
+`raise ValueError(...)`.
+
 ## The dots: `...` vs `*args/**kwargs`
 
 ```{webr}
 #| label: dots
 mean_style <- function(x, ...) {
-  message("extra args passed on: ")
   mean(x, ...)          # ... forwards: na.rm = TRUE lands in mean()
 }
 
@@ -148,9 +194,12 @@ def mean_style(x, *args, **kwargs):
 mean_style([1, 2, 3], na_rm=True)
 ```
 
-Use `...` to forward arguments to inner functions (that's its 90% use).
+Use `...` to **forward arguments to inner functions** — that's its 90% use.
+The danger is equal and opposite: typos vanish into `...` silently
+(`mean_style(x, narm = TRUE)` just ignores your typo), so keep forwarding
+interfaces narrow.
 
-## Scope & closures (quick but must-know)
+## Scope, closures, and two R quirks
 
 ```{webr}
 #| label: closure
@@ -169,9 +218,6 @@ def make_scaler(center):
     def scale(x):
         return np.asarray(x) - center   # closure over center
     return scale
-
-scale_to_brca1 = make_scaler(12.5)
-scale_to_brca1([10, 12.5, 20])          # array([-2.5,  0. ,  7.5])
 ```
 
 ::: {.callout-tip}
@@ -181,30 +227,76 @@ functools — all ship captured state around in functions. Recognizing closures
 makes all of them stop being magic.
 :::
 
+**Quirk 1 — lazy defaults.** R default arguments are evaluated *inside* the
+function, at use time — so a default can reference other arguments:
+
+```{webr}
+#| label: lazy
+rescale <- function(x, lo = min(x), hi = max(x)) {
+  (x - lo) / (hi - lo)
+}
+rescale(c(10, 20, 30))     # defaults computed from THIS x
+```
+
+```python
+# Python evaluates defaults ONCE at definition time — never do this:
+def danger(x, bucket=[]):        # the mutable-default bug
+    bucket.append(x)
+    return bucket
+print(danger(1), danger(2))      # [1], [1, 2]  ← shared list!
+```
+
+**Quirk 2 — partial matching.** `mean(x = 1:3, na.rm = TRUE)` works, and so
+would `mean(1:3, na = TRUE)` — R completes unambiguous prefixes. Convenient
+for the console, poisonous for scripts (new argument `na_action` breaks your
+`na =` silently). Always write full argument names in code.
+
 ## Drills (live pad)
 
 ```{webr}
 #| label: drills
 library(dplyr)
 
-# 1. Ternary: assign "sig" or "ns" to p <- 0.049 using if as a value
+# 1. Assign "sig"/"ns" to p <- 0.049 using if as a value
 
 # 2. case_when: label mtcars$hp into "low" (<100), "mid" (<180), "high"
 
 # 3. Write safe_log(x) that errors clearly if any x <= 0
 
-# 4. switch: given method <- "pearson", return "cor" else "cov" for "spearman"
+# 4. switch: given method <- "pearson", return "cor", for "spearman" "cov"
 
-# 5. Make make_power(n) returning a function that raises x to the n-th power
+# 5. make_power(n) returning a function that raises x to the n-th power
+
+# 6. Vectorized ternary: mpg above median → "thirsty" else "sippy"
+
+# 7. default-args trick: function geomean(x, logx = log(x)) returning exp(mean(logx))
+#    (careful with zeros!)
+
+# 8. A function nth_root(x, n = 2) with a guard for negative x when n is even
+
+# 9. Forwarding dots: my_sum(x, ...) that calls sum(x, ...) — test na.rm on chars
+
+# 10. case_when on a factor: recode mtcars$cyl 4→"four" 6→"six" 8→"eight"
+
+# 11. What does switch("b", a = 1, b = 2, 99) return? predict, then run
+
+# 12. Write is_monotonic(x): TRUE if x is non-decreasing — guard empty vectors
 ```
 
 ::: {.callout-tip collapse="true"}
 ## Expected answers
 1. `status <- if (p < 0.05) "sig" else "ns"`
-2. `case_when(hp < 100 ~ "low", hp < 180 ~ "mid", .default = "high")` inside `mutate`
-3. `safe_log <- function(x) { stopifnot(all(x > 0)); log(x) }`
+2. `case_when(hp < 100 ~ "low", hp < 180 ~ "mid", .default = "high")`
+3. `safe_log <- function(x) { stopifnot("x must be > 0" = all(x > 0)); log(x) }`
 4. `switch(method, pearson = "cor", spearman = "cov")`
 5. `make_power <- function(n) function(x) x^n`
+6. `if_else(mtcars$mpg > median(mtcars$mpg), "thirsty", "sippy")`
+7. `geomean <- function(x, logx = log(x)) exp(mean(logx))` — zeros give -Inf; guard or filter
+8. `nth_root <- function(x, n = 2) { stopifnot("even root of negative" = !(n %% 2 == 0 && x < 0)); x^(1/n) }`
+9. `my_sum <- function(x, ...) sum(x, ...)`
+10. `case_match(mtcars$cyl, 4 ~ "four", 6 ~ "six", 8 ~ "eight")`
+11. `2` — named dispatch, falls to default only on miss
+12. `is_monotonic <- function(x) { if (length(x) < 2) return(TRUE); all(diff(x) >= 0) }`
 :::
 
 ## Exercises
@@ -218,8 +310,8 @@ Classify expression: `expr < 1` → "silent", `1–5` → "low", `5–20` → "m
 #| exercise: ex-d3-cw
 library(dplyr)
 
-genes <- tibble(gene = c("XIST", "MYC", "GAPDH", "NONE"),
-                expr = c(0.2, 55.0, 4.4, 12.0))
+genes <- tibble::tibble(gene = c("XIST", "MYC", "GAPDH", "NONE"),
+                        expr = c(0.2, 55.0, 4.4, 12.0))
 
 genes |>
   mutate(level = ______)
@@ -304,11 +396,137 @@ make_threshold_labeler <- function(threshold) {
 ```
 :::
 
+### Exercise 4 — the lazy-default superpower
+
+Write `z_score(x, mu = mean(x), sigma = sd(x))` returning `(x - mu) / sigma`.
+The one-liner should work both standardize-itself *and* standardize against
+supplied training parameters — the exact pattern sklearn's `StandardScaler`
+encodes. (Why `sigma`, not `sd`? Naming an argument `sd` would shadow
+`base::sd()` inside its own default — a promise-recursion error. Function
+names make bad parameter names.)
+
+```{webr}
+#| exercise: ex-d3-z
+z_score <- function(x, mu = mean(x), sigma = sd(x)) {
+  ______
+}
+
+z_score(c(1, 2, 3, 4, 5))          # self-standardized
+z_score(c(1, 2, 3, 4, 5), mu = 0, sigma = 2)  # against training params
+```
+
+::: {.hint exercise="ex-d3-z"}
+Body is just `(x - mu) / sigma` — the laziness does the rest.
+:::
+
+::: {.solution exercise="ex-d3-z"}
+```r
+z_score <- function(x, mu = mean(x), sigma = sd(x)) {
+  (x - mu) / sigma
+}
+```
+:::
+
+### Exercise 5 — switchboard
+
+Write `nucleotide_color(base)` returning "A"→"green", "C"→"blue",
+"G"→"yellow", "T"→"red" via `switch`, and unknown bases → "grey". Guard:
+input must be a single character string.
+
+```{webr}
+#| exercise: ex-d3-switch
+nucleotide_color <- function(base) {
+  ______
+}
+
+sapply(c("A", "G", "T", "N"), nucleotide_color)
+```
+
+::: {.hint exercise="ex-d3-switch"}
+`switch(toupper(base), A = "green", C = "blue", G = "yellow", T = "red", "grey")`
+— the unnamed last argument is the default.
+:::
+
+::: {.solution exercise="ex-d3-switch"}
+```r
+nucleotide_color <- function(base) {
+  stopifnot("base must be a single string" =
+              is.character(base) && length(base) == 1)
+  switch(toupper(base),
+         A = "green", C = "blue",
+         G = "yellow", T = "red",
+         "grey")
+}
+```
+:::
+
+## Common pitfalls (real ones)
+
+::: {.callout-warning}
+## 1. Floating-point `==`
+`0.1 + 0.2 == 0.3` is `FALSE` — binary floats. Compare with a tolerance:
+`isTRUE(all.equal(0.1 + 0.2, 0.3))` (R) or `math.isclose(...)` (Python).
+This bug lives in p-value and coordinate comparisons everywhere.
+:::
+
+::: {.callout-warning}
+## 2. Unnamed `stopifnot()`
+`stopifnot(is.numeric(x))` on failure prints `is.numeric(x) is not TRUE` —
+true but useless. Always name: `stopifnot("x must be numeric" = is.numeric(x))`.
+:::
+
+::: {.callout-warning}
+## 3. `case_when` silent NAs
+Forget `.default` and unmatched rows become `NA` with no warning. After any
+new `case_when`, `count(df, new_col)` — if an unexpected `NA` appears,
+your cases don't cover the data.
+:::
+
+## Self-quiz — predict the output
+
+```{webr}
+#| label: quiz
+# Q1: what prints?
+f <- function(a, b = a * 2) a + b
+f(3)
+
+# Q2: what prints?
+case_when(c(TRUE, FALSE, NA) ~ "y", .default = "n")
+
+# Q3: what prints?
+g <- function(...) list(...)$z
+g(z = 5, w = 6)
+
+# Q4: what prints — and is this a good idea?
+h <- function(x = rnorm(1)) x
+c(h(), h())
+
+# Q5: what prints?
+k <- function(x) { x <- x * 10; x }
+n <- 5
+k(n)
+n
+```
+
+::: {.callout-tip collapse="true"}
+## Quiz answers
+1. `9` — `b` defaults to `a * 2` = 6, then `3 + 6`. Lazy defaults see the
+   same arguments.
+2. `"y" "n" "n"` — the NA condition falls through to `.default`. Watch for
+   this silently changing NA rows!
+3. `5` — `...` collects named args; you can pick them out by name
+4. Two *different* random numbers — each call re-evaluates the default.
+   (Good for rnorm, terrible for `bucket = list()` — Python evaluates once!)
+5. `50` then `5` — R passes by value; the function got a copy.
+   (pandas DataFrames are the opposite — mutate-in-place traps live there.)
+:::
+
 ## Wrap-up checklist
 
 - [ ] `if` returns a value; `case_when` is my vectorized elif
 - [ ] `seq_along()` not `1:length(x)` — always
 - [ ] Every function I write has guards (`stopifnot`) for anything a human could fat-finger
-- [ ] `...` forwards args; closures capture state
+- [ ] `...` forwards args; closures capture state; lazy defaults reference arguments
+- [ ] I scored 5/5 on the self-quiz
 
 **Tomorrow:** Algorithm Gym #1 — big-O, arrays, hash maps (in both dialects).

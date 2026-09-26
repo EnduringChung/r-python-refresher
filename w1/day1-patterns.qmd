@@ -17,40 +17,50 @@ subtitle: "Week 1 · Why R feels chaotic, and the map that fixes it"
 
 ## Why R feels "too flexible" (10 min)
 
-R is not one language — it's **two dialects welded together**:
+Three design facts explain almost all of the chaos:
 
-- **base R** (S heritage): `attach()`, `sapply()`, `df$x[cond]`, `for` loops, `matrix` stats style
-- **tidyverse** (tidy heritage): `dplyr`, `ggplot2`, `tibble`, pipes, consistent naming
+**1. R is two dialects welded together.** Base R carries its S-language
+heritage: `sapply()`, `df$x[cond]`, `attach()`, partial matching, loops.
+The tidyverse (2016–) rebuilt the common operations with consistent names,
+data-first arguments, and strict checks. When AI generates code, it mixes the
+dialects mid-script — `dplyr::filter` in one line, `df[df$x > 2,]` in the
+next — and each dialect has *three* ways to do anything, so you see a new
+style every time.
 
-Most confusion (including in AI-generated code) comes from **mixing the dialects
-mid-script**. The fix used throughout this course:
+**2. R's superpowers are invisible.** Vectorization, formula syntax,
+functional programming, and S3 dispatch are *why* idiomatic R looks nothing
+like idiomatic Python or C. Nobody names them for you, so idiomatic R reads
+as magic. Today we name them.
+
+**3. R trusts you too much.** Silent coercion, partial argument matching,
+growing vectors, `NA` propagation — R rarely stops you; it just does
+*something*. Good R code is built from patterns that make the trusting parts
+predictable.
 
 > ::: {.callout-important appearance="simple"}
 > ## Rule 1 of this course
 > **Write tidyverse-first.** Learn to *read* base R fluently, but produce
-> tidyverse. When you must touch base (modeling internals, bioinformatics
-> packages like DESeq2), isolate it in a small function with a tidy wrapper.
+> tidyverse. When you must touch base (modeling internals, DESeq2, matrix
+> math), isolate it in a small function with a tidy wrapper.
 > :::
-
-The second source of chaos: R's superpowers — vectorization, formulas,
-functional programming, S3 dispatch — are *invisible* if nobody names them.
-So here they are, named. **These 7 patterns cover ~90% of good R you will ever
-read or write.**
 
 All `{webr}` cells on a page **share one R session**, so `library()` once and
 every later cell can use it.
 
 ## Pattern 1 — Vectorization
 
-No `for` loop: operate on the whole vector. R's most important idea.
+No `for` loop: operate on the whole vector at once. This is R's single most
+important idea — it exists because R's interpreter is slow per-element but
+its C-level vector ops are fast, and because statistics *thinks* in columns.
 
 ```{webr}
 #| label: p1-r
 x <- c(2, 4, 6, 8)
 
-x * 2 + 1          # every element, at once
-ifelse(x > 4, "hi", "lo")   # vectorized if
-sqrt(x)            # every function is vectorized
+x * 2 + 1                    # every element, at once
+ifelse(x > 4, "hi", "lo")    # vectorized if — returns a vector
+sqrt(x)                      # every math function is vectorized
+pmax(x, 5)                   # element-wise max against a scalar
 ```
 
 ```python
@@ -61,13 +71,13 @@ x = np.array([2, 4, 6, 8])
 x * 2 + 1
 np.where(x > 4, "hi", "lo")
 np.sqrt(x)
+np.maximum(x, 5)
 ```
 
-::: {.callout-tip}
-## R vs Python indexing heads-up
-R vectors are **1-indexed**; numpy arrays are **0-indexed**. Full table in
-[Day 2](day2-data-structures.qmd).
-:::
+Why not loop? Three reasons: **speed** (C vs interpreter), **clarity** (the
+intent is "transform all of it"), and **safety** (no index bookkeeping, no
+off-by-one). A row-wise `for` loop over a data frame is almost always a
+vectorized one-liner in disguise.
 
 ## Pattern 2 — The pipe (data first)
 
@@ -83,7 +93,17 @@ mtcars |>
 
 Read it as a sentence: *"take mtcars, **then** filter, **then** group, **then**
 summarise."* The pipe works because every dplyr verb takes the data frame as
-its **first argument**. That's Pattern 3 hiding inside Pattern 2.
+its **first argument** — the pipe inserts the left side into the first
+argument slot of the right side.
+
+The alternative without pipes shows why they won:
+
+```r
+# same thing, upside-down reading order + naming tax
+by_cyl <- group_by(filter(mtcars, cyl != 4), cyl)
+result <- summarise(by_cyl, mean_mpg = mean(mpg))
+rm(by_cyl)
+```
 
 ```python
 # Python: the same "sentence" is method chaining
@@ -98,9 +118,10 @@ mtcars = pd.read_csv("https://raw.githubusercontent.com/vincentarelbundock/Rdata
 
 ::: {.callout-warning}
 ## AI-code smell
-`mtcars <- filter(mtcars, cyl != 4)` repeated five times with five different
-names (`mtcars2`, `mtcars3`, `df_final`, `df_final2`...) — that's pipe-less
-tidyverse. Refactor into one `|>` chain.
+`mtcars2 <- filter(mtcars, ...)`, `mtcars3 <- group_by(mtcars2, ...)`,
+`df_final <- summarise(mtcars3, ...)` — pipe-less tidyverse with a naming tax
+for every step. Refactor into one `|>` chain. The intermediate names carry
+zero information and invite reusing the wrong one.
 :::
 
 ## Pattern 3 — df-in, df-out functions
@@ -120,7 +141,16 @@ summarise_cyl(mtcars, min_mpg = 15)
 ```
 
 The shape is always: **data in → pipeline → data out**. One function = one
-verb-sized transformation. Compose them like Lego.
+verb-sized transformation. This is what makes analyses *composable* — you
+stack three small functions instead of copy-pasting five lines into a new
+script (and forgetting one).
+
+Two small habits that make Pattern 3 professional-grade:
+
+```r
+# 1. name data arguments `df` (or `data`) so readers know where the pipe enters
+# 2. give defaults so the function has a sensible zero-argument behavior
+```
 
 ```python
 def summarise_cyl(df, min_mpg=0):
@@ -141,8 +171,14 @@ summary(fit)$coefficients
 ```
 
 You will meet formulas everywhere: `lm`, `glm`, `boxplot(mpg ~ cyl)`,
-`DESeq2` designs (`~ batch + condition`), `edgeR`, mixed models. **Formulas
-are the single most reused syntax in applied R statistics** — worth loving.
+aggregate, lattice, mixed models, and — critically for you — **DESeq2
+designs** (`design = ~ batch + condition`) and edgeR model matrices.
+**Formulas are the single most reused syntax in applied R statistics.**
+
+Two reading rules:
+- `~` separates response (left) from predictors (right); nothing on the left
+  (`~ x + y`) is still a formula — just a structure spec (how DESeq2 uses it)
+- `+` inside a formula means "and also this term", **not** arithmetic
 
 ```python
 # Python borrowed the exact idea (patsy formula language)
@@ -150,6 +186,9 @@ import statsmodels.formula.api as smf
 fit = smf.ols("mpg ~ wt + C(cyl)", data=mtcars).fit()
 fit.params
 ```
+
+Note the tiny dialect difference: R wraps a raw column with `factor(cyl)`,
+patsy uses `C(cyl)`. Same concept: "treat as categorical."
 
 ## Pattern 5 — Tidy eval: `{{ }}` (recognize, don't memorize)
 
@@ -169,8 +208,10 @@ group_mean <- function(df, group_col, value_col) {
 group_mean(mtcars, cyl, mpg)
 ```
 
-You mostly need to **recognize** `{{ }}` (so AI-generated wrappers stop
-looking alien). Reach for it when your own functions take column names.
+Why does this exist? dplyr verbs capture what you *type* (`cyl` the symbol,
+not the string `"cyl"`) so they can both find the column and label output
+correctly. Inside your own function you re-capture with `{{ }}`. You mostly
+need to **recognize** it so wrappers in AI-generated code stop looking alien.
 
 ## Pattern 6 — Functionals (loops in disguise)
 
@@ -180,30 +221,42 @@ library(purrr)
 
 genes <- list(A = c(3, 5, 8), B = c(1, 9), C = c(4, 4, 4, 4))
 
-map_dbl(genes, mean)          # named vector of means
-map_int(genes, length)        # named vector of lengths
+map_dbl(genes, mean)          # named double vector of means
+map_int(genes, length)        # named integer vector of lengths
+map(genes, \(g) g / sum(g))   # any function, list out
 ```
 
+The purrr suffix is the return type: `map_dbl` → doubles, `map_int` →
+integers, `map_chr` → strings, plain `map` → list. That type discipline is
+exactly what `sapply()` lacks (it guesses — and guesses wrong at length 1,
+a classic silent bug).
+
 Rule of thumb: `map()` for transformation, `walk()` for side-effects
-(plots, saves). Inside dplyr, the same idea appears as `across()` and
-`group_modify()`.
+(plots, saves), `map_dfr()`/`list_rbind()` for "read many files, bind into
+one table".
 
 ```python
 genes = {"A": [3, 5, 8], "B": [1, 9], "C": [4, 4, 4, 4]}
 {k: sum(v) / len(v) for k, v in genes.items()}   # comprehension = map
+[sum(v) / len(v) for v in genes.values()]        # positional variant
 ```
 
 ## Pattern 7 — S3 dispatch (why `summary()` is psychic)
 
 `summary()`, `plot()`, `print()` behave differently depending on the **class**
-of the object. That's S3: one generic function, many per-class methods.
+of the object. That's S3: one generic function, many per-class methods,
+chosen at call time by looking at `class(x)`.
 
 ```{webr}
 #| label: p7-r
 fit <- lm(mpg ~ wt, data = mtcars)
-class(fit)          # "lm"
-names(methods(plot))[1:5]   # dozens of plot.<class> methods exist
+class(fit)                          # "lm"
+length(methods(plot))               # dozens of plot.<class> methods
 ```
+
+When you read AI-generated R that calls `plot(res)` and wonder "what does
+plot do here?" — the answer is always in the class. Discover the whole API
+of any object with `methods(class = "...")`.
 
 ```python
 # Python: the same concept is dunder methods + classes
@@ -214,9 +267,9 @@ names(methods(plot))[1:5]   # dozens of plot.<class> methods exist
 
 ::: {.callout-tip}
 ## This pays off in bioinformatics
-`DESeqDataSet`, `Seurat` objects, `phyloseq`, `SummarizedExperiment` — all are
-S3/S4 objects. When `plot(x)` "just works" on them, you now know why, and
-you know to look for `methods(class = "DESeqDataSet")` to discover the API.
+`DESeqDataSet`, `Seurat` objects, `SingleCellExperiment`, `phyloseq` — all
+are S3/S4 objects. When `plot(x)` "just works" on them, you now know why,
+and you know how to enumerate what else you can call on them.
 :::
 
 ## Read & refactor: AI code in the wild
@@ -237,14 +290,13 @@ for (i in 1:length(mtcars$cyl)) {
 mtcars$mpg_adj <- result
 ```
 
-What's wrong? (click)
-
 ::: {.callout-tip collapse="true"}
 ## The diagnosis
 1. `1:length(...)` is a **real bug** — if the vector is empty this becomes
-   `1:0` = `c(1, 0)` and the loop still runs. Use `seq_along()`.
-2. Row-wise loop + `if` = Pattern 1 (`ifelse`) begging to be used.
-3. Growing a vector in a loop (`result <- c(...)`) is slow and fragile.
+   `1:0` = `c(1, 0)` and the loop still runs, writing garbage. Use `seq_along()`.
+2. Row-wise loop + `if` = Pattern 1 (`if_else`) begging to be used.
+3. Growing a vector with `result <- c(result, ...)`-style assignments is
+   O(n²) and fragile.
 4. Direct `df$col[i]` indexing is base dialect; data should flow through a pipe.
 :::
 
@@ -254,32 +306,71 @@ mtcars_adj <- mtcars |>
   mutate(mpg_adj = if_else(cyl > 4, mpg * 1.1, mpg))
 ```
 
+One more — recognize before you scroll:
+
+```r
+out <- lapply(split(df, df$batch), function(d) {
+  coef(lm(y ~ x, data = d))
+})
+do.call(rbind, out)
+```
+
+::: {.callout-tip collapse="true"}
+## The patterns inside
+`split` + `lapply` + `do.call(rbind, ...)` is the base-R ancestor of
+`group_by() |> group_modify() |> ...` (Patterns 2+3) and of purrr's
+`map() |> list_rbind()` (Pattern 6). You don't have to *write* this style,
+but half the StackOverflow answers for R are written in it.
+:::
+
 ## Drills (live pad)
 
-Predict each output **before** running. Edit freely — this session is yours.
+Predict each output **before** running. Easy → spicy, top to bottom.
 
 ```{webr}
 #| label: drills
 library(dplyr)
+library(purrr)
 
-# 1. Vectorize: convert c(15, 22, 9, 30) °C to °F  (F = C*9/5 + 32)
+# 1. Convert c(15, 22, 9, 30) °C to °F  (F = C * 9/5 + 32)
 
-# 2. ifelse: label mtcars$cyl as "low" (4) / "high" (otherwise)
+# 2. Label mtcars$cyl "low" (== 4) / "high" (otherwise) — one call
 
-# 3. Pipe: top 3 rows of mtcars sorted by hp, descending
+# 3. Top 3 rows of mtcars by hp, descending — one pipe
 
-# 4. map_dbl: mean of each column of mtcars[, c("mpg", "hp", "wt")]
+# 4. Mean of each column of mtcars[, c("mpg", "hp", "wt")] — one functional
 
-# 5. Formula: boxplot(mpg ~ am, data = mtcars)
+# 5. boxplot of mpg split by am — formula style
+
+# 6. How many rows have mpg above the MEDIAN mpg? (chain, no intermediate)
+
+# 7. map over c(2, 4, 8) producing each value cubed, as a double vector
+
+# 8. Add column z = mpg / wt; keep rows where z > 8; return wt and z
+
+# 9. group_mean(mtcars, am, hp) — write group_mean with {{ }} first
+
+# 10. From the p6 `genes` list: total length of all elements combined
+
+# 11. data.frame of cyl → number of rows, via summarise — but sorted
+
+# 12. In one pipe: for each carb value, the max hp; label the column top_hp
 ```
 
 ::: {.callout-tip collapse="true"}
 ## Expected answers
 1. `c(15, 22, 9, 30) * 9 / 5 + 32`
-2. `ifelse(mtcars$cyl == 4, "low", "high")`
+2. `if_else(mtcars$cyl == 4, "low", "high")`
 3. `mtcars |> arrange(desc(hp)) |> slice_head(n = 3)`
 4. `map_dbl(mtcars[, c("mpg", "hp", "wt")], mean)`
-5. `boxplot(mpg ~ am, data = mtcars)` — a formula, not a loop
+5. `boxplot(mpg ~ am, data = mtcars)`
+6. `mtcars |> filter(mpg > median(mpg)) |> nrow()`
+7. `map_dbl(c(2, 4, 8), \(v) v^3)`
+8. `mtcars |> mutate(z = mpg / wt) |> filter(z > 8) |> select(wt, z)`
+9. see Pattern 5 cell — `group_by({{ group_col }}) |> summarise(mean = mean({{ value_col }}))`
+10. `reduce(map_int(genes, length), `+`)` — or `sum(unlist(genes))`
+11. `mtcars |> count(cyl) |> arrange(desc(n))`
+12. `mtcars |> group_by(carb) |> summarise(top_hp = max(hp))`
 :::
 
 ## Exercises
@@ -338,23 +429,158 @@ heavy_summary <- mtcars |>
 ```
 :::
 
-### Exercise 3 — the pattern audit
+### Exercise 3 — a df-in/df-out function (Pattern 3 + 5)
 
-For each line, name the pattern (1–7):
+Write `peak_table(df, group_col, value_col)` that returns one row per group
+with `n`, `mean`, `max` of the value column. It must work for ANY grouping
+column — test with `cyl` and with `am`.
+
+```{webr}
+#| exercise: ex-d1-fn
+library(dplyr)
+
+peak_table <- function(df, group_col, value_col) {
+  ______
+}
+
+peak_table(mtcars, cyl, hp)
+```
+
+::: {.hint exercise="ex-d1-fn"}
+Start the pipe with `df |> group_by({{ group_col }})` and summarise all
+three statistics from `{{ value_col }}`.
+:::
+
+::: {.solution exercise="ex-d1-fn"}
+```r
+peak_table <- function(df, group_col, value_col) {
+  df |>
+    group_by({{ group_col }}) |>
+    summarise(
+      n    = n(),
+      mean = mean({{ value_col }}),
+      max  = max({{ value_col }})
+    )
+}
+```
+:::
+
+### Exercise 4 — refactor the crime scene
+
+Refactor this into idiomatic tidyverse (hint: it's TWO problems in one):
+
+```r
+tmp <- data
+for (i in 1:nrow(tmp)) {
+  if (tmp$expr[i] < 1) {
+    tmp$level[i] <- "silent"
+  } else if (tmp$expr[i] < 10) {
+    tmp$level[i] <- "low"
+  } else {
+    tmp$level[i] <- "high"
+  }
+}
+```
+
+```{webr}
+#| exercise: ex-d1-refactor
+library(dplyr)
+data <- tibble::tibble(expr = c(0.3, 4.2, 33.0, 9.9))
+
+# your refactored version:
+______
+```
+
+::: {.hint exercise="ex-d1-refactor"}
+One `mutate()` with `case_when(expr < 1 ~ "silent", expr < 10 ~ "low", .default = "high")`.
+:::
+
+::: {.solution exercise="ex-d1-refactor"}
+```r
+data <- data |>
+  mutate(level = case_when(
+    expr < 1  ~ "silent",
+    expr < 10 ~ "low",
+    .default  = "high"
+  ))
+```
+:::
+
+### Exercise 5 — pattern audit
+
+For each line, name the pattern (1–7). No cell needed — answers below.
 
 ```r
 a) ggplot(df, aes(x, y)) + geom_point()
 b) purrr::map(files, read_csv)
 c) df |> mutate(z = x / sum(x))
-d) DESeq(dds)                      # thinks about: dds is an S4 object
+d) DESeq(dds)
 e) coxph(Surv(time, status) ~ age, data = df)
+f) recode_factor(samples$batch, b1 = "Batch 1")
+g) sapply(columns, function(col) sum(is.na(col)))
 ```
 
 ::: {.callout-tip collapse="true"}
 ## Answers
+a) none directly (grammar of graphics, but data-as-first-arg — P2/P3 spirit)
+b) Pattern 6 · c) Pattern 2 · d) Pattern 7 (S4 dispatch, S3's stricter cousin)
+e) Pattern 4 · f) none — a data-cleaning verb · g) Pattern 6 written in base
+(`sapply` = guessy `map`)
+:::
 
-a) none directly (grammar of graphics, but data flows in as first arg — P2/P3 spirit)
-b) Pattern 6 · c) Pattern 2 · d) Pattern 7 · e) Pattern 4
+## Common pitfalls (real ones)
+
+::: {.callout-warning}
+## 1. `1:length(x)` — the shapeshifting bug
+`length(0)` is 0, so `1:0` is `c(1, 0)` — a loop that runs *twice* on
+nothing. `seq_along(x)` returns an empty vector when `x` is empty. This bug
+ships in AI-generated R constantly.
+:::
+
+::: {.callout-warning}
+## 2. `ifelse()` vs `if_else()`
+Base `ifelse()` silently drops attributes (dates become numbers!) and
+recycles uneven vectors without complaint. `dplyr::if_else()` checks types
+and lengths. Default to `if_else()`/`case_when()`.
+:::
+
+::: {.callout-warning}
+## 3. Growing vectors in loops
+`out <- c(out, new)` inside a loop copies the whole vector every iteration
+(O(n²)). Collect into a `list()` and combine once — or don't loop at all.
+:::
+
+## Self-quiz — predict the output
+
+```{webr}
+#| label: quiz
+# Q1: what prints?
+x <- c(3, 1, 2)
+x[c(TRUE, FALSE, TRUE)]
+
+# Q2: what prints?
+mtcars |> group_by(cyl) |> summarise(n = n()) |> nrow()
+
+# Q3: what prints?
+map_int(c("a", "abc", ""), nchar)
+
+# Q4: what is different?
+f <- function(df, col) df[[col]]
+f(mtcars, "mpg") |> class()
+
+# Q5: what prints, and why is it spooky?
+y <- c()
+length(1:length(y))
+```
+
+::: {.callout-tip collapse="true"}
+## Quiz answers
+1. `3 2` — logical index keeps positions 1 and 3
+2. `3` — three distinct cylinder counts (4, 6, 8)
+3. `1 3 0` — nchar per string, as integers
+4. `numeric`/`double` — `df[[col]]` returns the *contents* (a vector),
+   whereas `df[col]` would return a one-column data frame
+5. `2` — `1:length(y)` is `1:0` = `c(1, 0)`, length 2. This is pitfall #1.
 :::
 
 ## Wrap-up checklist
@@ -363,5 +589,6 @@ b) Pattern 6 · c) Pattern 2 · d) Pattern 7 · e) Pattern 4
 - [ ] I understand why `1:length(x)` is a bug and `seq_along(x)` is correct
 - [ ] I write `|>` chains instead of `df2`, `df3`, `df_final`
 - [ ] Formula syntax no longer looks like magic
+- [ ] I scored 5/5 on the self-quiz (or at least learned why I didn't)
 
 **Tomorrow:** data structures — where R's `[`, `[[`, `$` meet Python's `[]`, `.loc`, `.iloc`.

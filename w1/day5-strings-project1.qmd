@@ -22,6 +22,10 @@ subtitle: "Week 1 · text hygiene, categorical memory, time parsing — then cle
 
 ## Strings: the parsing toolkit
 
+Text cleaning is 90% of "data cleaning", and it's the same four moves every
+time: **trim → normalize case → unify separators → extract**. Watch the
+pipeline on a typical bioinformatics mess (sample sheet IDs):
+
 ```{webr}
 #| label: strings
 library(stringr)
@@ -46,11 +50,65 @@ ids = [" sample_038 ", "SAMPLE-42", "sample_7"]
 [re.search(r"\d+", s).group() for s in ids]
 ```
 
+The full tidy workflow composes into one pipe — this exact pattern will be
+your Project 1 step 2:
+
+```{webr}
+#| label: tidy-pipe
+library(dplyr, warn.conflicts = FALSE)
+
+tibble(raw_id = c(" sample_038 ", "SAMPLE-42", "sample_7")) |>
+  mutate(id = str_to_lower(str_trim(raw_id)),
+         id = str_replace_all(id, "-", "_"),
+         num  = as.numeric(str_extract(id, "\\d+")))
+```
+
 ::: {.callout-tip}
 ## Regex is a transfer skill
-`\\d`, `+`, `^`, `$`, `[abc]` mean the same in R, Python, grep, and sed.
+`\d`, `+`, `^`, `$`, `[abc]` mean the same in R, Python, grep, and sed.
 Learn once, use everywhere. Note R strings need **double backslashes**
 (`"\\d"`) — a top-3 source of AI-generated R bugs.
+:::
+
+## Factors: categorical memory
+
+Why do factors exist? Three real reasons: **storage** (integers + a lookup
+table, which mattered when RAM cost a house), **modeling** (contrast
+coding uses the levels), and **plot order** (ggplot2 draws factor levels in
+level order, not alphabetical accident). The first reason is history; the
+other two are why they're still everywhere — including in sequencing
+metadata (batch, condition, cell type).
+
+```{webr}
+#| label: factors
+library(forcats)
+
+treat <- factor(c("ctrl", "treated", "treated", "ctrl"),
+                levels = c("ctrl", "treated"))
+as.integer(treat)                 # the codes underneath
+levels(treat)                     # the level table
+
+g <- fct_reorder(c("low", "mid", "low", "high"), c(1, 5, 2, 9))
+levels(g)                         # reordered by companion values
+fct_lump(c(rep("A", 10), "B", "C", "D"), n = 1)  # rare levels -> "Other"
+fct_recode(treat, control = "ctrl")   # rename a level (new = old!)
+```
+
+```python
+import pandas as pd
+treat = pd.Categorical(["ctrl", "treated", "treated", "ctrl"],
+                       categories=["ctrl", "treated"])
+treat.codes          # the codes underneath
+treat.categories     # the level table
+pd.Series(treat).cat.rename_categories({"ctrl": "control"})
+```
+
+::: {.callout-important}
+## The golden rule of factors
+**Recode the *values* first, convert to factor last.** If you factorize
+first, any spelling variant you missed becomes a level you didn't plan for —
+or worse, becomes `NA` when you set explicit levels. You will *see* this
+happen in Project 1 if you skip the recode.
 :::
 
 ## Dates: three formats, one column
@@ -65,39 +123,36 @@ s = pd.Series(["2024-03-01", "03/10/2024", "March 11, 2024"])
 pd.to_datetime(s, format="mixed")
 ```
 
+And the point of parsing is arithmetic — durations, floors, weekday rolls:
+
+```{webr}
+#| label: dates
+library(lubridate)
+
+d1 <- ymd("2024-03-01")
+d2 <- dmy("14/03/2024")
+
+d2 - d1                          # a difftime: 13 days
+wday(d2, label = TRUE)           # weekday, spelled out
+floor_date(d2, "week")           # rolls back to Sunday
+seq(d1, by = "week", length.out = 3)   # a date sequence
+```
+
+```python
+from datetime import date, timedelta
+d1 = date(2024, 3, 1)
+d2 = date(2024, 3, 14)
+(d2 - d1).days                   # 13
+d2.strftime("%A")                # 'Thursday'
+d1 + timedelta(weeks=2)          # date(2024, 3, 15)
+```
+
 ::: {.callout-warning}
 ## 03/10 — March 10 or October 3?
 Mixed day-first/month-first data is a silent-corruption hazard. Always print
 `min()` and `max()` after parsing; if the range looks impossible, your
 format guess was wrong.
 :::
-
-## Factors: categorical memory
-
-Factors store integer codes + a level table. Use them for **anything with a
-fixed set of values** — plotting order, model contrasts, storage size.
-
-```{webr}
-#| label: factors
-library(forcats)
-
-treat <- factor(c("ctrl", "treated", "treated", "ctrl"),
-                levels = c("ctrl", "treated"))
-as.integer(treat)                 # the codes underneath
-levels(treat)                     # the level table
-
-g <- fct_reorder(c("low", "mid", "low", "high"), c(1, 5, 2, 9))
-levels(g)                         # reordered by the companion values
-fct_lump(c(rep("A", 10), "B", "C", "D"), n = 1)  # rare levels -> "Other"
-```
-
-```python
-import pandas as pd
-treat = pd.Categorical(["ctrl", "treated", "treated", "ctrl"],
-                       categories=["ctrl", "treated"])
-treat.codes          # the codes underneath
-treat.categories     # the level table
-```
 
 ## Read & refactor: the week's AI-code smells
 
@@ -117,6 +172,59 @@ write.csv(data, "clean.csv", row.names=FALSE)
 3. **Sentinels ignored** (`-999`) → `na_if()` / `replace()` BEFORE arithmetic
 4. **No guards, no row counts** → assert results, report before/after
 5. `gsub("n/a", ...)` as an NA-maker → say what you mean: `na_if()`
+:::
+
+## Drills (live pad)
+
+```{webr}
+#| label: drills
+library(stringr)
+library(lubridate)
+library(forcats)
+library(dplyr, warn.conflicts = FALSE)
+
+peptides <- c("AngII", "substance P", "BRADYKININ", "AngII")
+
+# 1. Normalize peptides: trim, lower — predict the vector first
+
+# 2. Extract the digits from c("batch1_v2", "batch12_v1", "batch3")
+
+# 3. Which peptides contain "ang" ignoring case? (one call)
+
+# 4. Paste sample and peptide into "sample1-AngII" style IDs (paste or sprintf)
+
+# 5. Parse c("2024-03-01", "01-04-2024") — why does ymd() fail on the second?
+
+# 6. Days from today until 2026-12-31
+
+# 7. What weekday is 2024-02-29? (trick question - check!)
+
+# 8. fct_infreq(peptides): what order do the levels come out in?
+
+# 9. Make a factor with levels in order of appearance (fct_inorder)
+
+# 10. Convert "no", "yes", "yes" to a factor with levels no < yes, then
+#     as.numeric() it — what do you get?
+
+# 11. str_sub("ATGGCCATA", 1, 3) — codon extraction; now the last 3
+
+# 12. How many chars in each of c("ATG", "ATGGCC", "")? — one call, integers
+```
+
+::: {.callout-tip collapse="true"}
+## Expected answers
+1. `str_to_lower(str_trim(peptides))` — "angii" "substance p" "bradykinin" "angii"
+2. `str_extract(c("batch1_v2","batch12_v1","batch3"), "\\d+")` — "1" "12" "3"
+3. `str_detect(peptides, regex("ang", ignore_case = TRUE))` — TRUE,F,F,TRUE
+4. `paste("sample1", peptides[1], sep = "-")`
+5. `ymd("01-04-2024")` fails/NA — it's day-first; use `dmy()`
+6. `as.Date("2026-12-31") - Sys.Date()` — a difftime
+7. 2024 IS a leap year — `wday("2024-02-29", label=TRUE)` → "Thu"
+8. most frequent first: AngII, then the singletons alphabetically
+9. `fct_inorder(peptides)` — AngII, substance P, BRADYKININ
+10. `1 2 2` — factor codes are 1-based level indices, not 0/1
+11. "ATG" and "ATA" — str_sub handles start>0, and negative end = from tail
+12. `str_length(c("ATG","ATGGCC",""))` — 3, 6, 0
 :::
 
 ## 🧪 Project 1 — Clean the peptide assay
@@ -170,12 +278,72 @@ Reference solutions (only after an honest attempt):
 `projects/p1/solution.R` · `projects/p1/solution.py` — they print identical
 results by design.
 
+## Common pitfalls (real ones)
+
+::: {.callout-warning}
+## 1. Regex backslashes
+In R source, `"\\d+"` is the regex `\d+`. AI-generated code often ships
+`"\d+"` — which R reads as `d+` and matches literal "d"s. Python raw strings
+(`r"\d+"`) exist precisely to dodge this.
+:::
+
+::: {.callout-warning}
+## 2. Factorizing before recoding
+Set `levels =` too early and misspelled variants become NA with zero
+warning. Sequence: trim/lowercase → recode (`case_match`) → *then*
+`factor(..., levels = ...)` → `count()` to prove no NAs.
+:::
+
+::: {.callout-warning}
+## 3. Sentinel `-999` in means
+One `-999` drags a mean of 30 down to 4 without any error — `na_if()`
+*before* any statistic, every time. This is why the project makes you count
+NAs twice: after recode, after parsing.
+:::
+
+## Self-quiz — predict the output
+
+```{webr}
+#| label: quiz
+# Q1: what prints?
+str_extract_all("batch7_v3_sample2", "\\d+")[[1]]
+
+# Q2: what prints?
+factor(c("b", "a", "b"), levels = c("a", "b")) |> as.numeric()
+
+# Q3: what prints?
+as.numeric(factor(c("high", "low", "mid")))   # no levels given!
+
+# Q4: trap — what does this print? (mixing Date and POSIXct)
+ymd("2024-03-10") - ymd_hms("2024-03-09 22:00:00")
+
+# Q5: trap — what prints?
+x <- c("a", NA, "b")
+x == "b"
+```
+
+::: {.callout-tip collapse="true"}
+## Quiz answers
+1. `c("7", "3", "2")` — extract_all returns every match as a character vector
+2. `2 1 2` — codes follow the LEVELS order (a=1, b=2), not appearance order
+3. `1 2 3` — without explicit levels, alphabetical: high=1, low=2, mid=3.
+   (This is why unordered factor codes lie about magnitude.)
+4. **Not** "26 hours" — mixing `Date` and `POSIXct` dispatches incompatible
+   `-` methods and yields garbage (a nonsense Date). Convert first:
+   `as_datetime(ymd(...)) - ymd_hms(...)` → `Time difference of 2 hours`.
+   One type per column, per script.
+5. `FALSE NA TRUE` — ordinary values compare normally, but `NA == "b"` is NA
+   and poisons `ifelse`/filters downstream; use `!is.na(x) & x == "b"` when
+   NA positions matter
+:::
+
 ## Wrap-up checklist
 
 - [ ] I can normalize a messy text column blindfolded (trim → lower → unify)
 - [ ] I parse mixed dates defensively and sanity-check the min/max
 - [ ] I recode BEFORE factorizing, and count NAs after every recode
 - [ ] My cleaning scripts end with guards + a before/after report
+- [ ] I scored 5/5 on the self-quiz
 
 **Next week:** the grammar of wrangling, ggplot2 ↔ matplotlib, and real
 statistics — ending in Project 2, a reproducible Quarto report.

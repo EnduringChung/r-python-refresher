@@ -13,6 +13,15 @@ subtitle: "Patterns, data structures, functions, hash maps, and a messy-data pro
 | 4 | [Algorithm Gym #1](day4-gym1.qmd) | big-O thinking + the hash-map pattern |
 | 5 | [Strings, Dates + Project 1](day5-strings-project1.qmd) | clean a real messy dataset, twice |
 
+## The rhythm of every day (~1–2 hrs)
+
+1. **Cheat sheet** — 60–90 seconds of scanning, top of each lesson
+2. **Lesson** — prose + live examples, both dialects
+3. **Drills** — ~12 one-liners in a live pad; predict out loud, then run
+4. **Exercises** — 5–6 graded, each with hint + solution (attempt first!)
+5. **Common pitfalls** — real bugs, most caught while building this course
+6. **Self-quiz** — 5 predict-the-output questions; answers collapsed below
+
 ## Ground rules for the week
 
 1. **Write tidyverse-first**, read base R fluently

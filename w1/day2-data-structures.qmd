@@ -22,21 +22,55 @@ subtitle: "Week 1 · vectors & lists vs lists & dicts; `[` `[[` `$` vs `[]` `.lo
 
 ## Vectors: the atom of R
 
-**Every scalar in R is a vector of length 1.** Atomic vectors are
-*homogeneous* — mix types and R silently coerces (a classic AI-code surprise):
+**Every scalar in R is a vector of length 1.** There is no "plain number"
+type — print `2.5` and you get `[1] 2.5`, where `[1]` is the position index.
+This is why R functions are written to accept *many* values wherever another
+language would demand one, and why vectorization (Pattern 1) is native
+rather than bolted on with numpy.
+
+Atomic vectors are *homogeneous* — one type per vector. Mix types and R
+silently coerces up the ladder **logical → integer → double → character**
+(a classic AI-code surprise):
 
 ```{webr}
 #| label: coercion
 c(1, 2, "three")     # everything became character!
 c(TRUE, 1, 0)        # everything became numeric
-typeof(c(1L, 2L))    # integer vs double
+typeof(c(1L, 2L))    # integer (L suffix) vs double
+c(1, NA)             # NA fits in any type — it's "typed missing"
 ```
-
-Python lists are heterogeneous by design — no silent coercion:
 
 ```python
-[1, 2, "three"]   # fine, stays mixed
+[1, 2, "three"]   # fine, stays mixed — lists are heterogeneous by design
 ```
+
+::: {.callout-tip}
+## Why this matters for bioinformatics
+A counts matrix that silently became `character` because one cell held
+`"-"` is a *real* incident people have spent hours on. `typeof()`,
+`str()`, and `table(sapply(df, typeof))` are your first responses to
+"the numbers look wrong."
+:::
+
+## Attributes: R's metadata side-channels
+
+Any object can carry named attributes — names, dimensions, classes, labels.
+`names()` is the attribute you'll touch daily; `attr(x, "...")` is the
+generic form:
+
+```{webr}
+#| label: attrs
+counts <- c(geneA = 120, geneB = 87, geneC = 300)
+
+names(counts)                  # the attribute
+counts["geneB"]                # pick by name (keeps the name!)
+counts[2] * 2                  # position works too
+attributes(counts)             # all attributes at once
+```
+
+Python keeps metadata as object fields instead (`arr.dtype`, `df.attrs`,
+`Series.name`) — same idea, different flavor: R's attributes live *on* the
+data, Python's live *in* the object.
 
 ## Lists: R's everything-else
 
@@ -51,6 +85,7 @@ gene[["chr"]]        # by exact name
 gene[["starts"]][2]  # nest in
 gene[1]              # ⚠️ returns a LIST containing the element
 gene[[1]]            # returns the element itself
+length(gene)         # 3 — lists count elements, not contents
 ```
 
 ::: {.callout-important}
@@ -62,6 +97,26 @@ Same trap shape in Python: `df[["col"]]` returns a DataFrame,
 `df["col"]` returns a Series.
 :::
 
+And a shape you'll meet in the wild — lists of lists as "records", exactly
+like a JSON response:
+
+```{webr}
+#| label: list-json
+sample <- list(
+  id = "S1",
+  metrics = list(reads = 5.2e6, pct_dup = 8.3),
+  pass_qc = TRUE
+)
+
+sample$metrics$reads            # chain $ through
+sample[["metrics"]][["pct_dup"]]
+```
+
+```python
+sample = {"id": "S1", "metrics": {"reads": 5.2e6, "pct_dup": 8.3}, "pass_qc": True}
+sample["metrics"]["reads"]
+```
+
 ## The full indexing translation table
 
 ```{webr}
@@ -69,10 +124,11 @@ Same trap shape in Python: `df[["col"]]` returns a DataFrame,
 x <- c(10, 20, 30, 40, 50)
 
 x[2]         # 1-based pick
-x[2:4]       # slice
+x[2:4]       # slice, END INCLUSIVE
 x[-2]        # REMOVE position 2 (negative = exclusion)
 x[x > 25]    # logical filter
 x[c(1, 5)]   # pick by positions
+x[x > 25 & x < 45]   # AND of conditions
 ```
 
 ```python
@@ -94,6 +150,12 @@ x[-2]           # ⚠️ NOT "drop the 2nd" — it's 2nd from the END -> 40
 
 ## DataFrames: same idea, different accents
 
+A data.frame **is a list of equal-length vectors** — that's not a metaphor,
+call `length(df)` and see. A tibble is a modern data.frame: never coerces
+strings to factors, never partial-matches `$`, prints nicely, complains
+loudly. A pandas DataFrame is a dict of Series. **All three are "named
+columns", just stored differently.**
+
 ```{webr}
 #| label: df-r
 library(tibble)
@@ -109,6 +171,7 @@ df[["expr"]]       # same
 df[1, ]            # row 1 (note the comma!)
 df[, c("gene", "expr")]   # columns by name
 df[df$expr > 10, ]        # filter rows by condition
+length(df)         # 3 — the columns ARE the list elements
 ```
 
 ```python
@@ -146,7 +209,9 @@ v <- c(1, NA, 3)
 mean(v)                 # NA spreads!
 mean(v, na.rm = TRUE)   # 2
 is.na(v)                # where are the NAs?
-is.null(v)              # FALSE — v exists, it has a hole
+sum(is.na(v))           # how many
+NA == NA                # NA! ("unknown == unknown" is unknown)
+v[v == NA]              # ⚠️ never works — use is.na()
 ```
 
 ```python
@@ -155,6 +220,7 @@ v = pd.Series([1, np.nan, 3])
 
 v.mean()            # pandas SKIPS nan by default (opposite default!)
 v.isna()            # where are the NAs?
+v[v.isna()]         # filter to the missing rows
 ```
 
 ::: {.callout-important}
@@ -184,9 +250,12 @@ out = pd.concat([read_one(f) for f in files])
 
 ## Drills (live pad)
 
+Predict each output **before** running.
+
 ```{webr}
 #| label: drills
 lst <- list(id = "sample_42", reads = c(100, 250, 175), qc = TRUE)
+v <- c(5, NA, 12, NA, 3)
 
 # 1. Get "sample_42" two different ways
 
@@ -194,18 +263,40 @@ lst <- list(id = "sample_42", reads = c(100, 250, 175), qc = TRUE)
 
 # 3. What is lst[2]?  What is lst[[2]]?  Predict, then run.
 
-# 4. Vector v <- c(5, NA, 12, NA, 3): count the NAs, then mean ignoring them
+# 4. Count the NAs in v; mean of v ignoring them
 
-# 5. mtcars: select rows where cyl == 6, only columns mpg and wt
+# 5. mtcars: rows where cyl == 6, only mpg and wt (base bracket style)
+
+# 6. Same thing with filter() + select()
+
+# 7. names of the mtcars columns, sorted alphabetically
+
+# 8. typeof(mtcars$cyl) — predict before running
+
+# 9. c(TRUE, TRUE) + c(1, 1) — what type is the result?
+
+# 10. mtcars$mpg[mtcars$mpg > 30] — how many values? (predict, then count)
+
+# 11. Make a named vector of c(2, 3) with names "ctrl", "treated", then
+#     look up "treated" by name
+
+# 12. Does lst$qc exist? Does lst$dna? (predict both, no errors allowed)
 ```
 
 ::: {.callout-tip collapse="true"}
 ## Expected answers
 1. `lst$id` or `lst[["id"]]`
 2. `lst$reads[2]`
-3. `lst[2]` is a list of length 1; `lst[[2]]` is the numeric vector
-4. `sum(is.na(v))`, `mean(v, na.rm = TRUE)`
-5. `mtcars[mtcars$cyl == 6, c("mpg", "wt")]` — or `filter(mtcars, cyl == 6) |> select(mpg, wt)`
+3. `lst[2]` is a list of length 1 (container); `lst[[2]]` is the numeric vector
+4. `sum(is.na(v))` → 2 · `mean(v, na.rm = TRUE)` → 6.667
+5. `mtcars[mtcars$cyl == 6, c("mpg", "wt")]`
+6. `mtcars |> filter(cyl == 6) |> select(mpg, wt)`
+7. `sort(names(mtcars))`
+8. `"double"` — data.frame columns are double unless integerized
+9. `"numeric"` — logical coerced up the ladder
+10. 4 values above 30 (32.4, 30.4, 33.9, 30.4)
+11. `setNames(c(2, 3), c("ctrl", "treated"))["treated"]`
+12. `lst$qc` → TRUE · `lst$dna` → NULL (no error — $ never errors)
 :::
 
 ## Exercises
@@ -240,7 +331,7 @@ Same goal in both dialects: **drop** the second element of `c(10, 20, 30)`.
 ```{webr}
 #| exercise: ex-d2-neg
 x <- c(10, 20, 30)
-# R: one character, drop the 2nd element
+# R: one expression, drop the 2nd element
 ______
 ```
 
@@ -251,7 +342,7 @@ R: `x[-2]`.
 ::: {.solution exercise="ex-d2-neg"}
 ```r
 x[-2]        # 10 30
-# Python for the same job:  [10, 20, 30];  x.pop(1)  or  x[:1] + x[2:]
+# Python for the same job:  x.pop(1)  or  x[:1] + x[2:]
 # Python's x[-2] would return 20 — the second from the END. Total opposite.
 ```
 :::
@@ -267,12 +358,13 @@ df <- tibble(gene = c("BRCA1", "TP53", "MYC", "EGFR"),
 # a) expr of TP53 by name (one expression)
 # b) the whole ROW of MYC
 # c) genes with expr > 10, as a character vector
+# d) number of columns of df WITHOUT ncol()
 ______
 ```
 
 ::: {.hint exercise="ex-d2-df"}
 a) `df$expr[df$gene == "TP53"]` · b) `df[df$gene == "MYC", ]` ·
-c) `df$gene[df$expr > 10]`
+c) `df$gene[df$expr > 10]` · d) `length(df)` — a data.frame is a list of columns!
 :::
 
 ::: {.solution exercise="ex-d2-df"}
@@ -280,7 +372,120 @@ c) `df$gene[df$expr > 10]`
 df$expr[df$gene == "TP53"]   # 40.3
 df[df$gene == "MYC", ]
 df$gene[df$expr > 10]        # "BRCA1" "TP53"
+length(df)                   # 2
 ```
+:::
+
+### Exercise 4 — records in the wild
+
+You get a nested list from an API (shape like the `sample` object earlier).
+Write `dup_rate(s)` returning `pct_dup / 100` — using `[[` chains, and a
+guard that errors clearly if `pass_qc` is FALSE.
+
+```{webr}
+#| exercise: ex-d2-nested
+sample <- list(id = "S7", metrics = list(reads = 4.1e6, pct_dup = 12.5),
+               pass_qc = TRUE)
+
+dup_rate <- function(s) {
+  ______
+}
+
+dup_rate(sample)
+```
+
+::: {.hint exercise="ex-d2-nested"}
+Guard: `if (!s$pass_qc) stop("sample failed QC: ", s$id)`. Then
+`s$metrics$pct_dup / 100`.
+:::
+
+::: {.solution exercise="ex-d2-nested"}
+```r
+dup_rate <- function(s) {
+  if (!s$pass_qc) stop("sample failed QC: ", s$id)
+  s$metrics$pct_dup / 100
+}
+```
+:::
+
+### Exercise 5 — NA hygiene
+
+Given `x <- c(3, NA, 7, NA, 2)`: produce (a) the count of NAs, (b) x with
+NAs replaced by the mean of the non-missing values (imputation — you'll use
+this in scRNA-seq QC constantly), (c) the position of the NAs.
+
+```{webr}
+#| exercise: ex-d2-na
+x <- c(3, NA, 7, NA, 2)
+# a) count
+# b) imputed vector
+# c) positions
+______
+```
+
+::: {.hint exercise="ex-d2-na"}
+b) `if_else(is.na(x), mean(x, na.rm = TRUE), x)` · c) `which(is.na(x))`
+:::
+
+::: {.solution exercise="ex-d2-na"}
+```r
+sum(is.na(x))                                    # 2
+if_else(is.na(x), mean(x, na.rm = TRUE), x)      # 3 4 7 4 2
+which(is.na(x))                                  # 2 4
+```
+:::
+
+## Common pitfalls (real ones)
+
+::: {.callout-warning}
+## 1. `$` never errors
+`df$exprssion` (typo) silently returns `NULL`, which then flows on and
+produces a confusing error three lines later. Tibbles make `$` strict —
+one more reason to use them. Quick check: `stopifnot("expr" %in% names(df))`.
+:::
+
+::: {.callout-warning}
+## 2. `x[x == NA]` returns everything-or-nothing
+Comparing to NA gives NA, and NA subsetting returns NA-rows. The only
+correct tool is `is.na()`.
+:::
+
+::: {.callout-warning}
+## 3. Silent type coercion corrupts matrices
+One `"-"` in a counts column makes the whole vector character, and
+`as.matrix()` of that column is suddenly text. Check `typeof()` after any
+import, before any math.
+:::
+
+## Self-quiz — predict the output
+
+```{webr}
+#| label: quiz
+# Q1: length of what?
+length(list(a = c(1, 2, 3), b = "x"))
+
+# Q2: what prints?
+c("x", 1, TRUE)[3]
+
+# Q3: what prints, and why is it not NA?
+y <- c(1, NA); y[is.na(y)] <- 0; y
+
+# Q4: what prints?
+d <- data.frame(a = 1:3, b = c("p", "q", "r"))
+d$a > 2
+
+# Q5: trap — what happens?
+c(1, 2, 3)[-c(1, 3)]
+```
+
+::: {.callout-tip collapse="true"}
+## Quiz answers
+1. `2` — lists count elements (columns), not contents
+2. `"TRUE"` — index 3; everything coerced to character on the way in
+3. `1 0` — assigning through `is.na()` replaces the holes; this is the
+   idiomatic imputation pattern
+4. `FALSE FALSE TRUE` — a logical vector, one value per row
+5. `2` — negative *vector* index drops positions 1 AND 3
 :::
 
 ## Wrap-up checklist
@@ -290,5 +495,6 @@ df$gene[df$expr > 10]        # "BRCA1" "TP53"
 - [ ] R slices are inclusive (`2:4`), Python exclusive (`1:4`)
 - [ ] `NA` spreads in R math by default; pandas skips it by default
 - [ ] Never grow vectors/frames in loops — collect then bind
+- [ ] I scored 5/5 on the self-quiz
 
 **Tomorrow:** control flow + writing functions that guard their inputs.
