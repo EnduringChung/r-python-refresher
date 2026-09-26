@@ -30,18 +30,22 @@ print("\nOnly concentration has NaNs — a missing well means the measurement "
 d = dat.dropna(subset=["concentration_ng_ul"]).copy()
 d["log_conc"] = np.log10(d["concentration_ng_ul"])
 
-fig, axes = plt.subplots(1, 2, figsize=(10, 4))
-axes[0].hist(dat["concentration_ng_ul"].dropna(),
-             bins=np.arange(0, 160, 10), edgecolor="white")
-axes[0].set(xlabel="concentration (ng/uL)", ylabel="wells",
-            title=f"Right-skewed — classic lognormal\n"
-                  f"(Shapiro p={st.shapiro(d['concentration_ng_ul']).pvalue:.2g})")
-axes[1].hist(d["log_conc"], bins=np.arange(0.4, 2.2, 0.2), edgecolor="white")
-axes[1].set(xlabel="log10 concentration", ylabel="wells",
-            title=f"Log scale: approximately normal\n"
-                  f"(Shapiro p={st.shapiro(d['log_conc']).pvalue:.2f})")
-plt.tight_layout()
+# 3. raw histogram
+fig, ax = plt.subplots(figsize=(5, 4))
+ax.hist(dat["concentration_ng_ul"].dropna(),
+        bins=np.arange(0, 160, 10), edgecolor="white")
+ax.set(xlabel="concentration (ng/uL)", ylabel="wells",
+       title=f"Right-skewed — classic lognormal\n"
+             f"(Shapiro p={st.shapiro(d['concentration_ng_ul']).pvalue:.2g})")
 plt.savefig("projects/p2/fig1_hist_raw.png", dpi=300, bbox_inches="tight")
+plt.close()
+
+# 4. log10 histogram
+fig, ax = plt.subplots(figsize=(5, 4))
+ax.hist(d["log_conc"], bins=np.arange(0.4, 2.2, 0.2), edgecolor="white")
+ax.set(xlabel="log10 concentration", ylabel="wells",
+       title=f"Log scale: approximately normal\n"
+             f"(Shapiro p={st.shapiro(d['log_conc']).pvalue:.2f})")
 plt.savefig("projects/p2/fig2_hist_log.png", dpi=300, bbox_inches="tight")
 plt.close()
 
