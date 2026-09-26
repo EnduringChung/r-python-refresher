@@ -8,3 +8,6 @@ _site/
 .RData
 __pycache__/
 .venv/
+
+/.quarto/
+**/*.quarto_ipynb

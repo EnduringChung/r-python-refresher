@@ -8,14 +8,17 @@ website:
   title: "R + Python Refresher"
   navbar:
     background: primary
-    left:
-      - href: index.qmd
-        text: Home
-      - href: setup.qmd
-        text: Setup & Smoke Test
+    title: "R + Py Refresher"
     right:
       - icon: github
-        href: https://github.com/
+        href: https://github.com/EnduringChung/r-python-refresher
+  sidebar:
+    style: docked
+    contents:
+      - index.qmd
+      - setup.qmd
+      - section: "Week 1 — Language core"
+        contents: w1/*.qmd
   page-navigation: true
 
 format:

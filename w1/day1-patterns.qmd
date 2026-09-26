@@ -1,0 +1,367 @@
+---
+title: "Day 1 — The 7 Patterns of R (and Python's Zen)"
+subtitle: "Week 1 · Why R feels chaotic, and the map that fixes it"
+---
+
+## Cheat sheet (30 seconds)
+
+| # | R pattern | One-line recognition cue | Python counterpart |
+|---|---|---|---|
+| 1 | Vectorization | "no loop, whole vector at once" | numpy / pandas vectorization |
+| 2 | The pipe `|>` | "data first, then verbs" | method chaining `.query().assign()` |
+| 3 | df-in, df-out | "function eats data.frame, returns data.frame" | functions taking/returning DataFrames |
+| 4 | Formula `y ~ x` | "tilde = model spec" | patsy/statsmodels `"mpg ~ am"` |
+| 5 | Tidy eval `{{ var }}` | "column names as arguments" | — (plain string/kwargs) |
+| 6 | Functionals `map()` | "loop hidden in a function" | comprehensions / `map()` |
+| 7 | S3 dispatch | "`plot(x)` does different things per class" | `__repr__`, dunder dispatch |
+
+## Why R feels "too flexible" (10 min)
+
+R is not one language — it's **two dialects welded together**:
+
+- **base R** (S heritage): `attach()`, `sapply()`, `df$x[cond]`, `for` loops, `matrix` stats style
+- **tidyverse** (tidy heritage): `dplyr`, `ggplot2`, `tibble`, pipes, consistent naming
+
+Most confusion (including in AI-generated code) comes from **mixing the dialects
+mid-script**. The fix used throughout this course:
+
+> ::: {.callout-important appearance="simple"}
+> ## Rule 1 of this course
+> **Write tidyverse-first.** Learn to *read* base R fluently, but produce
+> tidyverse. When you must touch base (modeling internals, bioinformatics
+> packages like DESeq2), isolate it in a small function with a tidy wrapper.
+> :::
+
+The second source of chaos: R's superpowers — vectorization, formulas,
+functional programming, S3 dispatch — are *invisible* if nobody names them.
+So here they are, named. **These 7 patterns cover ~90% of good R you will ever
+read or write.**
+
+All `{webr}` cells on a page **share one R session**, so `library()` once and
+every later cell can use it.
+
+## Pattern 1 — Vectorization
+
+No `for` loop: operate on the whole vector. R's most important idea.
+
+```{webr}
+#| label: p1-r
+x <- c(2, 4, 6, 8)
+
+x * 2 + 1          # every element, at once
+ifelse(x > 4, "hi", "lo")   # vectorized if
+sqrt(x)            # every function is vectorized
+```
+
+```python
+# Python: plain lists can't do this...
+import numpy as np
+x = np.array([2, 4, 6, 8])
+
+x * 2 + 1
+np.where(x > 4, "hi", "lo")
+np.sqrt(x)
+```
+
+::: {.callout-tip}
+## R vs Python indexing heads-up
+R vectors are **1-indexed**; numpy arrays are **0-indexed**. Full table in
+[Day 2](day2-data-structures.qmd).
+:::
+
+## Pattern 2 — The pipe (data first)
+
+```{webr}
+#| label: p2-r
+library(dplyr)
+
+mtcars |>
+  filter(cyl != 4) |>
+  group_by(cyl) |>
+  summarise(mean_mpg = mean(mpg))
+```
+
+Read it as a sentence: *"take mtcars, **then** filter, **then** group, **then**
+summarise."* The pipe works because every dplyr verb takes the data frame as
+its **first argument**. That's Pattern 3 hiding inside Pattern 2.
+
+```python
+# Python: the same "sentence" is method chaining
+import pandas as pd
+mtcars = pd.read_csv("https://raw.githubusercontent.com/vincentarelbundock/Rdatasets/master/csv/datasets/mtcars.csv")
+
+(mtcars
+   .query("cyl != 4")
+   .groupby("cyl")["mpg"]
+   .mean())
+```
+
+::: {.callout-warning}
+## AI-code smell
+`mtcars <- filter(mtcars, cyl != 4)` repeated five times with five different
+names (`mtcars2`, `mtcars3`, `df_final`, `df_final2`...) — that's pipe-less
+tidyverse. Refactor into one `|>` chain.
+:::
+
+## Pattern 3 — df-in, df-out functions
+
+```{webr}
+#| label: p3-r
+library(dplyr)
+
+summarise_cyl <- function(df, min_mpg = 0) {
+  df |>
+    filter(mpg >= min_mpg) |>
+    group_by(cyl) |>
+    summarise(n = n(), mean_mpg = mean(mpg))
+}
+
+summarise_cyl(mtcars, min_mpg = 15)
+```
+
+The shape is always: **data in → pipeline → data out**. One function = one
+verb-sized transformation. Compose them like Lego.
+
+```python
+def summarise_cyl(df, min_mpg=0):
+    return (df[df["mpg"] >= min_mpg]
+              .groupby("cyl")["mpg"]
+              .agg(["count", "mean"])
+              .reset_index())
+```
+
+## Pattern 4 — The formula interface
+
+The tilde is R's mini-language for "left side explained by right side."
+
+```{webr}
+#| label: p4-r
+fit <- lm(mpg ~ wt + factor(cyl), data = mtcars)
+summary(fit)$coefficients
+```
+
+You will meet formulas everywhere: `lm`, `glm`, `boxplot(mpg ~ cyl)`,
+`DESeq2` designs (`~ batch + condition`), `edgeR`, mixed models. **Formulas
+are the single most reused syntax in applied R statistics** — worth loving.
+
+```python
+# Python borrowed the exact idea (patsy formula language)
+import statsmodels.formula.api as smf
+fit = smf.ols("mpg ~ wt + C(cyl)", data=mtcars).fit()
+fit.params
+```
+
+## Pattern 5 — Tidy eval: `{{ }}` (recognize, don't memorize)
+
+When a function takes a *column name* as an argument, dplyr needs `{{ }}`
+to look inside it:
+
+```{webr}
+#| label: p5-r
+library(dplyr)
+
+group_mean <- function(df, group_col, value_col) {
+  df |>
+    group_by({{ group_col }}) |>
+    summarise(mean = mean({{ value_col }}))
+}
+
+group_mean(mtcars, cyl, mpg)
+```
+
+You mostly need to **recognize** `{{ }}` (so AI-generated wrappers stop
+looking alien). Reach for it when your own functions take column names.
+
+## Pattern 6 — Functionals (loops in disguise)
+
+```{webr}
+#| label: p6-r
+library(purrr)
+
+genes <- list(A = c(3, 5, 8), B = c(1, 9), C = c(4, 4, 4, 4))
+
+map_dbl(genes, mean)          # named vector of means
+map_int(genes, length)        # named vector of lengths
+```
+
+Rule of thumb: `map()` for transformation, `walk()` for side-effects
+(plots, saves). Inside dplyr, the same idea appears as `across()` and
+`group_modify()`.
+
+```python
+genes = {"A": [3, 5, 8], "B": [1, 9], "C": [4, 4, 4, 4]}
+{k: sum(v) / len(v) for k, v in genes.items()}   # comprehension = map
+```
+
+## Pattern 7 — S3 dispatch (why `summary()` is psychic)
+
+`summary()`, `plot()`, `print()` behave differently depending on the **class**
+of the object. That's S3: one generic function, many per-class methods.
+
+```{webr}
+#| label: p7-r
+fit <- lm(mpg ~ wt, data = mtcars)
+class(fit)          # "lm"
+names(methods(plot))[1:5]   # dozens of plot.<class> methods exist
+```
+
+```python
+# Python: the same concept is dunder methods + classes
+# print(obj)  calls obj.__str__
+# len(obj)    calls obj.__len__
+# df.head()   is a method on the DataFrame class
+```
+
+::: {.callout-tip}
+## This pays off in bioinformatics
+`DESeqDataSet`, `Seurat` objects, `phyloseq`, `SummarizedExperiment` — all are
+S3/S4 objects. When `plot(x)` "just works" on them, you now know why, and
+you know to look for `methods(class = "DESeqDataSet")` to discover the API.
+:::
+
+## Read & refactor: AI code in the wild
+
+Real pattern: chatbot-generated R that *works* but teaches you nothing.
+Diagnose it with the 7 patterns:
+
+```r
+# ❌ Before: valid R, zero patterns
+result <- c()
+for (i in 1:length(mtcars$cyl)) {
+  if (mtcars$cyl[i] > 4) {
+    result[i] <- mtcars$mpg[i] * 1.1
+  } else {
+    result[i] <- mtcars$mpg[i]
+  }
+}
+mtcars$mpg_adj <- result
+```
+
+What's wrong? (click)
+
+::: {.callout-tip collapse="true"}
+## The diagnosis
+1. `1:length(...)` is a **real bug** — if the vector is empty this becomes
+   `1:0` = `c(1, 0)` and the loop still runs. Use `seq_along()`.
+2. Row-wise loop + `if` = Pattern 1 (`ifelse`) begging to be used.
+3. Growing a vector in a loop (`result <- c(...)`) is slow and fragile.
+4. Direct `df$col[i]` indexing is base dialect; data should flow through a pipe.
+:::
+
+```r
+# ✅ After: Pattern 1 + Pattern 2, one line of intent
+mtcars_adj <- mtcars |>
+  mutate(mpg_adj = if_else(cyl > 4, mpg * 1.1, mpg))
+```
+
+## Drills (live pad)
+
+Predict each output **before** running. Edit freely — this session is yours.
+
+```{webr}
+#| label: drills
+library(dplyr)
+
+# 1. Vectorize: convert c(15, 22, 9, 30) °C to °F  (F = C*9/5 + 32)
+
+# 2. ifelse: label mtcars$cyl as "low" (4) / "high" (otherwise)
+
+# 3. Pipe: top 3 rows of mtcars sorted by hp, descending
+
+# 4. map_dbl: mean of each column of mtcars[, c("mpg", "hp", "wt")]
+
+# 5. Formula: boxplot(mpg ~ am, data = mtcars)
+```
+
+::: {.callout-tip collapse="true"}
+## Expected answers
+1. `c(15, 22, 9, 30) * 9 / 5 + 32`
+2. `ifelse(mtcars$cyl == 4, "low", "high")`
+3. `mtcars |> arrange(desc(hp)) |> slice_head(n = 3)`
+4. `map_dbl(mtcars[, c("mpg", "hp", "wt")], mean)`
+5. `boxplot(mpg ~ am, data = mtcars)` — a formula, not a loop
+:::
+
+## Exercises
+
+### Exercise 1 — vectorize the loop
+
+Rewrite `classify_gc()` **without** any loop or `if`, using vectorization.
+
+```{webr}
+#| exercise: ex-d1-vector
+classify_gc <- function(gc_scores, threshold = 50) {
+  # Return "high" or "low" for every score, vectorized
+  # (gc_scores is like c(39.2, 55.1, 48.7, 61.0))
+  ______
+}
+
+classify_gc(c(39.2, 55.1, 48.7, 61.0))
+```
+
+::: {.hint exercise="ex-d1-vector"}
+`if_else(condition, "high", "low")` or `ifelse()` — one call, whole vector.
+:::
+
+::: {.solution exercise="ex-d1-vector"}
+```r
+classify_gc <- function(gc_scores, threshold = 50) {
+  if_else(gc_scores > threshold, "high", "low")
+}
+```
+:::
+
+### Exercise 2 — build a pipe
+
+Using `mtcars`: keep rows with `wt > 2`, then for each `cyl` compute
+`n` and `mean_wt`, sorted by `mean_wt` descending. One pipe.
+
+```{webr}
+#| exercise: ex-d1-pipe
+library(dplyr)
+
+heavy_summary <- mtcars |>
+  ______
+```
+
+::: {.hint exercise="ex-d1-pipe"}
+Verbs in order: `filter()` → `group_by()` → `summarise(n = n(), mean_wt = mean(wt))` → `arrange(desc(mean_wt))`.
+:::
+
+::: {.solution exercise="ex-d1-pipe"}
+```r
+heavy_summary <- mtcars |>
+  filter(wt > 2) |>
+  group_by(cyl) |>
+  summarise(n = n(), mean_wt = mean(wt)) |>
+  arrange(desc(mean_wt))
+```
+:::
+
+### Exercise 3 — the pattern audit
+
+For each line, name the pattern (1–7):
+
+```r
+a) ggplot(df, aes(x, y)) + geom_point()
+b) purrr::map(files, read_csv)
+c) df |> mutate(z = x / sum(x))
+d) DESeq(dds)                      # thinks about: dds is an S4 object
+e) coxph(Surv(time, status) ~ age, data = df)
+```
+
+::: {.callout-tip collapse="true"}
+## Answers
+
+a) none directly (grammar of graphics, but data flows in as first arg — P2/P3 spirit)
+b) Pattern 6 · c) Pattern 2 · d) Pattern 7 · e) Pattern 4
+:::
+
+## Wrap-up checklist
+
+- [ ] I can name all 7 patterns and point to one example each
+- [ ] I understand why `1:length(x)` is a bug and `seq_along(x)` is correct
+- [ ] I write `|>` chains instead of `df2`, `df3`, `df_final`
+- [ ] Formula syntax no longer looks like magic
+
+**Tomorrow:** data structures — where R's `[`, `[[`, `$` meet Python's `[]`, `.loc`, `.iloc`.

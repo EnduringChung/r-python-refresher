@@ -1,0 +1,181 @@
+---
+title: "Day 5 — Strings, Factors, Dates + Project 1"
+subtitle: "Week 1 · text hygiene, categorical memory, time parsing — then clean a real mess"
+---
+
+## Cheat sheet (90 seconds)
+
+| Task | R (stringr/lubridate/forcats) | Python |
+|---|---|---|
+| contains pattern | `str_detect(x, "ATG")` | `"ATG" in s`, `s.str.contains` |
+| extract match | `str_extract(x, "\\d+")` | `re.search(r"\d+", s)` |
+| replace | `str_replace(x, " ", "_")` | `s.replace(" ", "_")` |
+| case | `str_to_lower(x)` | `s.lower()` |
+| trim | `str_trim(x)` | `s.strip()` |
+| split | `str_split(x, ",")` | `s.split(",")` |
+| join | `paste(x, y, sep = "_")` | `f"{x}_{y}"` |
+| parse date | `ymd("2024-03-01")`, `mdy()`, `dmy()` | `pd.to_datetime(..., format=...)` |
+| date parts | `year(d)`, `month(d)`, `wday(d)` | `d.year`, `d.month`, `d.dayofweek` |
+| floor to week | `floor_date(d, "week")` | `d.to_period("W")` |
+| category | `factor(x)`, `fct_reorder()` | `astype("category")` |
+| lump rare levels | `fct_lump(n = 5)` | `.value_counts()` + manual |
+
+## Strings: the parsing toolkit
+
+```{webr}
+#| label: strings
+library(stringr)
+
+ids <- c(" sample_038 ", "SAMPLE-42", "sample_7")
+
+str_trim(ids)                       # kill outer whitespace
+str_to_lower(str_trim(ids))         # normalize case
+str_replace_all(ids, "-", "_")      # unify separators
+str_detect(ids, "\\d{2}")           # contains a 2-digit number?
+str_extract(ids, "\\d+")            # pull the number out
+```
+
+```python
+import re
+ids = [" sample_038 ", "SAMPLE-42", "sample_7"]
+
+[s.strip() for s in ids]
+[s.strip().lower() for s in ids]
+[s.replace("-", "_") for s in ids]
+[bool(re.search(r"\d{2}", s)) for s in ids]
+[re.search(r"\d+", s).group() for s in ids]
+```
+
+::: {.callout-tip}
+## Regex is a transfer skill
+`\\d`, `+`, `^`, `$`, `[abc]` mean the same in R, Python, grep, and sed.
+Learn once, use everywhere. Note R strings need **double backslashes**
+(`"\\d"`) — a top-3 source of AI-generated R bugs.
+:::
+
+## Dates: three formats, one column
+
+The project file mixes `2024-03-01`, `03/10/2024`, and `March 11, 2024`.
+In R you'd parse with `parse_date_time(orders = ...)`. Python's
+`pd.to_datetime(format="mixed")` (pandas ≥ 2.0) does the same job:
+
+```python
+import pandas as pd
+s = pd.Series(["2024-03-01", "03/10/2024", "March 11, 2024"])
+pd.to_datetime(s, format="mixed")
+```
+
+::: {.callout-warning}
+## 03/10 — March 10 or October 3?
+Mixed day-first/month-first data is a silent-corruption hazard. Always print
+`min()` and `max()` after parsing; if the range looks impossible, your
+format guess was wrong.
+:::
+
+## Factors: categorical memory
+
+Factors store integer codes + a level table. Use them for **anything with a
+fixed set of values** — plotting order, model contrasts, storage size.
+
+```{webr}
+#| label: factors
+library(forcats)
+
+treat <- factor(c("ctrl", "treated", "treated", "ctrl"),
+                levels = c("ctrl", "treated"))
+as.integer(treat)                 # the codes underneath
+levels(treat)                     # the level table
+
+g <- fct_reorder(c("low", "mid", "low", "high"), c(1, 5, 2, 9))
+levels(g)                         # reordered by the companion values
+fct_lump(c(rep("A", 10), "B", "C", "D"), n = 1)  # rare levels -> "Other"
+```
+
+```python
+import pandas as pd
+treat = pd.Categorical(["ctrl", "treated", "treated", "ctrl"],
+                       categories=["ctrl", "treated"])
+treat.codes          # the codes underneath
+treat.categories     # the level table
+```
+
+## Read & refactor: the week's AI-code smells
+
+```r
+# ❌ Before
+data <- read.csv("raw.csv")
+data$date <- as.POSIXct(data$date, format="%m/%d/%Y")  # crashes on the other 2 formats
+data$treatment <- ifelse(data$treatment=="control","control", ifelse(data$treatment=="CTRL","control", data$treatment))
+data$conc <- as.numeric(gsub("n/a","", data$conc))     # turns "" into NA, but -999 stays!
+write.csv(data, "clean.csv", row.names=FALSE)
+```
+
+::: {.callout-tip collapse="true"}
+## Smell checklist
+1. **One format hardcoded** → mixed-format parsing (`parse_date_time` / `format="mixed"`)
+2. **Nested ifelse for recodes** → `case_match` / `.replace()`
+3. **Sentinels ignored** (`-999`) → `na_if()` / `replace()` BEFORE arithmetic
+4. **No guards, no row counts** → assert results, report before/after
+5. `gsub("n/a", ...)` as an NA-maker → say what you mean: `na_if()`
+:::
+
+## 🧪 Project 1 — Clean the peptide assay
+
+Files live in `projects/p1/`. **Do it in BOTH languages** — the fix is that
+the two pipelines end in the *same numbers*.
+
+**The mess** (`data/peptides_assay.csv`, 125 rows):
+
+- headers with spaces, caps and symbols (` Sample ID `, `Concentration (ng/uL)`)
+- `Treatment` spelled `control` / `CTRL` / `Control` / `treated` / `Treated`
+- sample IDs with padding whitespace and random CAPS
+- concentrations: real values + `"n/a"` + `""` + sentinel `-999`
+- dates in **three** formats mixed
+- 5 rows duplicated wholesale
+
+**Your pipeline** (same steps in R and Python):
+
+1. snake_case the column names
+2. trim + lowercase `sample_id`
+3. collapse `treatment` variants to `control` / `treated` (beware `ctrl`!)
+4. `n/a`, `""`, `-999` → `NA`, concentration → numeric
+5. parse the three date formats to one Date column
+6. drop exact duplicates (report how many)
+7. factors/Categorical with ordered treatment levels
+8. save clean CSV
+9. **guards + report**: assert no stray whitespace/`-999`/NA-treatments remain,
+   print rows before/after, NAs per column, mean concentration by treatment × peptide
+
+**Starters:** `projects/p1/starter.R` and `projects/p1/starter.py` have the
+numbered TODOs. Run from repo root:
+
+```bash
+Rscript projects/p1/starter.R
+python3 projects/p1/starter.py
+```
+
+**Check your numbers:** after cleaning you should see exactly **120 rows,
+5 duplicates removed, 13 concentration NAs, 0 treatment NAs**, and mean
+AngII concentration ≈ 30.1 (control) vs 32.3 (treated).
+
+::: {.callout-caution collapse="true"}
+## Stuck? The two traps everyone hits
+1. `CTRL` → lowercased `"ctrl"` is **not** `"control"`. If you map levels
+   without recoding, `ctrl` rows silently become NA. Count NAs after recoding!
+2. `read_csv()` trims header whitespace for you, but `pd.read_csv` does NOT —
+   Python headers still have the stray spaces until you strip them.
+:::
+
+Reference solutions (only after an honest attempt):
+`projects/p1/solution.R` · `projects/p1/solution.py` — they print identical
+results by design.
+
+## Wrap-up checklist
+
+- [ ] I can normalize a messy text column blindfolded (trim → lower → unify)
+- [ ] I parse mixed dates defensively and sanity-check the min/max
+- [ ] I recode BEFORE factorizing, and count NAs after every recode
+- [ ] My cleaning scripts end with guards + a before/after report
+
+**Next week:** the grammar of wrangling, ggplot2 ↔ matplotlib, and real
+statistics — ending in Project 2, a reproducible Quarto report.

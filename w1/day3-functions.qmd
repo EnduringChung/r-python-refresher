@@ -1,0 +1,314 @@
+---
+title: "Day 3 — Control Flow + Functions"
+subtitle: "Week 1 · if as a value, `case_when`, `...` vs `*args`, guards & closures"
+---
+
+## Cheat sheet (60 seconds)
+
+| Task | R | Python |
+|---|---|---|
+| conditional value | `x <- if (a) 1 else 2` | `x = 1 if a else 2` |
+| vectorized branch | `if_else(cond, a, b)` | `np.where(cond, a, b)` |
+| multi-case (row-wise) | `case_when(...)` | `np.select([...], [...])` |
+| dispatch on value | `switch(type, A = 1, B = 2)` | `dict` lookup |
+| optional args | `f(x, trim = 0)` | `def f(x, trim=0)` |
+| any extra args | `f(...)` | `*args, **kwargs` |
+| raise error | `stop("msg")` | `raise ValueError("msg")` |
+| check inputs | `stopifnot(...)` | `assert` / explicit `if` |
+
+## `if` is a value in R (a superpower)
+
+```{webr}
+#| label: ifvalue
+score <- 87
+
+grade  <- if (score > 90) "A" else "B"     # the if EXPRESSION returns a value
+grade
+```
+
+In Python the same idea is the ternary:
+
+```python
+score = 87
+grade = "A" if score > 90 else "B"
+```
+
+## Vectorized branching: the workhorse
+
+Never loop to branch element-by-element — branch on whole columns:
+
+```{webr}
+#| label: casewhen
+library(dplyr)
+
+tibble(pvalue = c(1e-12, 0.03, 0.2, 0.7)) |>
+  mutate(stars = case_when(
+    pvalue < 0.001 ~ "***",
+    pvalue < 0.01  ~ "**",
+    pvalue < 0.05  ~ "*",
+    .default       = "ns"     # catch-all, keeps order explicit
+  ))
+```
+
+`case_when` is evaluated top-down, first match wins — like a tidy `elif` chain.
+
+```python
+import numpy as np, pandas as pd
+p = pd.Series([1e-12, 0.03, 0.2, 0.7])
+pd.Series(np.select(
+    [p < 0.001, p < 0.01, p < 0.05],
+    ["***", "**", "*"],
+    default="ns"))
+```
+
+::: {.callout-warning}
+## Subtle difference
+R's `case_when` chains conditions top-down per value; `np.select` checks the
+**condition lists** in order, same semantics — but in Python remember
+conditions apply to the *whole array at once*, in the order given. First match
+wins in both.
+:::
+
+## Loops: allowed, but know when
+
+```{webr}
+#| label: loops
+# The classic AI-generated bug:
+v <- c()
+# for (i in 1:length(v)) print(v[i])   # BUG: 1:0 = c(1,0), loop runs twice!
+
+seq_along(v)   # empty — the loop body never runs. Correct tool.
+```
+
+Legit loop uses: iterative algorithms (MCMC, EM), `while` until convergence,
+side-effects across files. **Transformation → vectorize / map. Iteration
+with memory → loop.**
+
+```python
+# Python: empty-range loops just don't run — no 1:0 trap
+v = []
+for i in range(len(v)):   # zero iterations
+    print(v[i])
+```
+
+## Functions that don't embarrass you
+
+```{webr}
+#| label: function
+#' Fold-change with a guard clause
+#'
+#' @param treat numeric, treated intensities
+#' @param ctrl  numeric, control intensities
+#' @param pseudo numeric, added to both to avoid divide-by-zero
+log2fc <- function(treat, ctrl, pseudo = 1) {
+  stopifnot(
+    "treat must be numeric" = is.numeric(treat),
+    "ctrl must be numeric"  = is.numeric(ctrl),
+    "lengths must match"    = length(treat) == length(ctrl)
+  )
+  log2((treat + pseudo) / (ctrl + pseudo))
+}
+
+log2fc(c(32, 8), c(2, 2))
+log2fc("oops", 2)   # error message a human can read
+```
+
+Anatomy: **roxygen comment → guard clauses → one job → explicit return of
+the last expression.** Guards turn cryptic downstream failures into
+immediate, named ones — this is 80% of "robust code".
+
+```python
+import numpy as np
+
+def log2fc(treat, ctrl, pseudo=1):
+    """Fold-change with a guard clause."""
+    treat, ctrl = np.asarray(treat, float), np.asarray(ctrl, float)
+    if treat.shape != ctrl.shape:
+        raise ValueError("treat and ctrl must have the same shape")
+    return np.log2((treat + pseudo) / (ctrl + pseudo))
+```
+
+## The dots: `...` vs `*args/**kwargs`
+
+```{webr}
+#| label: dots
+mean_style <- function(x, ...) {
+  message("extra args passed on: ")
+  mean(x, ...)          # ... forwards: na.rm = TRUE lands in mean()
+}
+
+mean_style(c(1, NA, 3), na.rm = TRUE)
+```
+
+```python
+def mean_style(x, *args, **kwargs):
+    print(f"extra kwargs: {kwargs}")
+    return sum(x) / len(x)
+
+mean_style([1, 2, 3], na_rm=True)
+```
+
+Use `...` to forward arguments to inner functions (that's its 90% use).
+
+## Scope & closures (quick but must-know)
+
+```{webr}
+#| label: closure
+make_scaler <- function(center) {
+  function(x) x - center       # remembers `center` from birth environment
+}
+
+scale_to_brca1 <- make_scaler(center = 12.5)
+scale_to_brca1(c(10, 12.5, 20))
+```
+
+```python
+import numpy as np
+
+def make_scaler(center):
+    def scale(x):
+        return np.asarray(x) - center   # closure over center
+    return scale
+
+scale_to_brca1 = make_scaler(12.5)
+scale_to_brca1([10, 12.5, 20])          # array([-2.5,  0. ,  7.5])
+```
+
+::: {.callout-tip}
+## Where you already use closures
+`purrr::partial()`, ggplot `aes()` mappings, sklearn `Pipeline` steps,
+functools — all ship captured state around in functions. Recognizing closures
+makes all of them stop being magic.
+:::
+
+## Drills (live pad)
+
+```{webr}
+#| label: drills
+library(dplyr)
+
+# 1. Ternary: assign "sig" or "ns" to p <- 0.049 using if as a value
+
+# 2. case_when: label mtcars$hp into "low" (<100), "mid" (<180), "high"
+
+# 3. Write safe_log(x) that errors clearly if any x <= 0
+
+# 4. switch: given method <- "pearson", return "cor" else "cov" for "spearman"
+
+# 5. Make make_power(n) returning a function that raises x to the n-th power
+```
+
+::: {.callout-tip collapse="true"}
+## Expected answers
+1. `status <- if (p < 0.05) "sig" else "ns"`
+2. `case_when(hp < 100 ~ "low", hp < 180 ~ "mid", .default = "high")` inside `mutate`
+3. `safe_log <- function(x) { stopifnot(all(x > 0)); log(x) }`
+4. `switch(method, pearson = "cor", spearman = "cov")`
+5. `make_power <- function(n) function(x) x^n`
+:::
+
+## Exercises
+
+### Exercise 1 — case_when classifier
+
+Classify expression: `expr < 1` → "silent", `1–5` → "low", `5–20` → "medium",
+`> 20` → "high". Order matters — boundaries go the clean way.
+
+```{webr}
+#| exercise: ex-d3-cw
+library(dplyr)
+
+genes <- tibble(gene = c("XIST", "MYC", "GAPDH", "NONE"),
+                expr = c(0.2, 55.0, 4.4, 12.0))
+
+genes |>
+  mutate(level = ______)
+```
+
+::: {.hint exercise="ex-d3-cw"}
+Strict inequalities chained top-down: `expr < 1 ~ "silent"`, `expr < 5 ~ "low"`,
+`expr < 20 ~ "medium"`, `.default = "high"`.
+:::
+
+::: {.solution exercise="ex-d3-cw"}
+```r
+genes |>
+  mutate(level = case_when(
+    expr < 1  ~ "silent",
+    expr < 5  ~ "low",
+    expr < 20 ~ "medium",
+    .default  = "high"
+  ))
+```
+:::
+
+### Exercise 2 — a function with guards
+
+Write `shannon_entropy(probs)` = `-sum(p * log2(p))`. Guards: numeric,
+non-negative, sum to 1 (within 0.01). Return the entropy.
+
+```{webr}
+#| exercise: ex-d3-shannon
+shannon_entropy <- function(probs) {
+  ______
+}
+
+shannon_entropy(c(0.5, 0.5))        # 1
+shannon_entropy(c(0.25, 0.25, 0.25, 0.25))  # 2
+```
+
+::: {.hint exercise="ex-d3-shannon"}
+Guard with `stopifnot()`; then filter out zeros before logging
+(`log2(0) = -Inf`): `probs[probs > 0]`.
+:::
+
+::: {.solution exercise="ex-d3-shannon"}
+```r
+shannon_entropy <- function(probs) {
+  stopifnot(
+    "probs must be numeric" = is.numeric(probs),
+    "probs must be >= 0"    = all(probs >= 0),
+    "probs must sum to 1"   = abs(sum(probs) - 1) < 0.01
+  )
+  p <- probs[probs > 0]
+  -sum(p * log2(p))
+}
+```
+:::
+
+### Exercise 3 — closure factory
+
+Build `make_threshold_labeler(threshold)` that returns a function labeling
+values `"above"`/`"below"`. Create one at 0.05 and test on `c(0.01, 0.2)`.
+
+```{webr}
+#| exercise: ex-d3-closure
+make_threshold_labeler <- function(threshold) {
+  ______
+}
+
+label_p <- make_threshold_labeler(0.05)
+label_p(c(0.01, 0.2))
+```
+
+::: {.hint exercise="ex-d3-closure"}
+Return an anonymous function that captures `threshold`:
+`function(x) if_else(x < threshold, "below", "above")`.
+:::
+
+::: {.solution exercise="ex-d3-closure"}
+```r
+make_threshold_labeler <- function(threshold) {
+  function(x) if_else(x < threshold, "below", "above")
+}
+```
+:::
+
+## Wrap-up checklist
+
+- [ ] `if` returns a value; `case_when` is my vectorized elif
+- [ ] `seq_along()` not `1:length(x)` — always
+- [ ] Every function I write has guards (`stopifnot`) for anything a human could fat-finger
+- [ ] `...` forwards args; closures capture state
+
+**Tomorrow:** Algorithm Gym #1 — big-O, arrays, hash maps (in both dialects).

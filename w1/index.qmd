@@ -1,18 +1,27 @@
 ---
-title: "Week 1 — Language core, side-by-side"
+title: "Week 1 — Language Core, Side-by-Side"
+subtitle: "Patterns, data structures, functions, hash maps, and a messy-data project"
 ---
 
-::: {.callout-caution appearance="simple"}
-## Under construction
+## The week at a glance
 
-Week 1 content is written in Phase 2 (see `PLAN.md`). Today this page just
-exists so site navigation works.
-:::
+| Day | Lesson | Superpower gained |
+|---|---|---|
+| 1 | [The 7 Patterns of R](day1-patterns.qmd) | see structure in R's chaos |
+| 2 | [Data Structures](day2-data-structures.qmd) | `[`/`[[`/`$` ↔ `[]`/`.loc`/`.iloc` fluency |
+| 3 | [Control Flow + Functions](day3-functions.qmd) | functions with guards, `case_when`, closures |
+| 4 | [Algorithm Gym #1](day4-gym1.qmd) | big-O thinking + the hash-map pattern |
+| 5 | [Strings, Dates + Project 1](day5-strings-project1.qmd) | clean a real messy dataset, twice |
 
-## Planned days
+## Ground rules for the week
 
-1. Setup + The 7 Patterns of R
-2. Data structures, side-by-side
-3. Control flow + functions
-4. Algorithm Gym #1: Big-O, arrays, hash maps
-5. Strings, factors, dates + **Project 1**
+1. **Write tidyverse-first**, read base R fluently
+2. Every function gets **guard clauses** (`stopifnot`) — from today on
+3. No `1:length(x)` — ever
+4. Do every exercise **twice** when it's cheap: once per dialect
+5. End-of-week checkpoint: Project 1 produces identical numbers in R and Python
+
+## Drill rule
+
+Predict the output **out loud** before running any cell. Being wrong on
+purpose is the fastest refresher there is.

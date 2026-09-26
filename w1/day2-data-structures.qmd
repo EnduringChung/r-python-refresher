@@ -1,0 +1,294 @@
+---
+title: "Day 2 — Data Structures, Side-by-Side"
+subtitle: "Week 1 · vectors & lists vs lists & dicts; `[` `[[` `$` vs `[]` `.loc` `.iloc`"
+---
+
+## Cheat sheet (60 seconds)
+
+| Task | R | Python |
+|---|---|---|
+| 1-D homogeneous container | atomic `vector` `c(1,2,3)` | numpy `array` |
+| 1-D heterogeneous container | `list` `list(a=1, b="x")` | `list` / `dict` |
+| key → value | named `list` / named `vector` | `dict` |
+| table | `data.frame` / `tibble` | pandas `DataFrame` |
+| table column | named vector inside a list | `Series` |
+| first element | `x[1]` | `x[0]` |
+| named pick | `x[["gene"]]`, `x$gene` | `d["gene"]`, `obj.gene` |
+| slice positions 2–4 | `x[2:4]` | `x[1:4]` |
+| drop position 2 | `x[-2]` | `del`/mask (**`x[-2]` ≠ drop!**) |
+| logical filter | `x[x > 3]` | `x[x > 3]` (same idea) |
+| count elements | `length(x)` | `len(x)` |
+| column names | `names(df)`, `colnames(df)` | `df.columns` |
+
+## Vectors: the atom of R
+
+**Every scalar in R is a vector of length 1.** Atomic vectors are
+*homogeneous* — mix types and R silently coerces (a classic AI-code surprise):
+
+```{webr}
+#| label: coercion
+c(1, 2, "three")     # everything became character!
+c(TRUE, 1, 0)        # everything became numeric
+typeof(c(1L, 2L))    # integer vs double
+```
+
+Python lists are heterogeneous by design — no silent coercion:
+
+```python
+[1, 2, "three"]   # fine, stays mixed
+```
+
+## Lists: R's everything-else
+
+Lists hold anything, including other lists — they're R's dicts *and* objects:
+
+```{webr}
+#| label: lists
+gene <- list(symbol = "BRCA1", chr = "17", starts = c(1, 5, 9))
+
+gene$symbol          # by name ($ = partial + no spaces)
+gene[["chr"]]        # by exact name
+gene[["starts"]][2]  # nest in
+gene[1]              # ⚠️ returns a LIST containing the element
+gene[[1]]            # returns the element itself
+```
+
+::: {.callout-important}
+## The `[` vs `[[` trap (interview classic)
+- `x[1]` → **same container, one element** (a list slice; keeps names)
+- `x[[1]]` → **the element itself** ("give me the contents")
+
+Same trap shape in Python: `df[["col"]]` returns a DataFrame,
+`df["col"]` returns a Series.
+:::
+
+## The full indexing translation table
+
+```{webr}
+#| label: r-index
+x <- c(10, 20, 30, 40, 50)
+
+x[2]         # 1-based pick
+x[2:4]       # slice
+x[-2]        # REMOVE position 2 (negative = exclusion)
+x[x > 25]    # logical filter
+x[c(1, 5)]   # pick by positions
+```
+
+```python
+x = [10, 20, 30, 40, 50]
+
+x[1]            # 0-based pick            -> 20
+x[1:4]          # slice, end EXCLUSIVE    -> [20, 30, 40]
+del x[1]        # remove position 1; x is now [10, 30, 40, 50]
+[e for e in x if e > 25]        # logical filter -> [30, 40, 50]
+x[-2]           # ⚠️ NOT "drop the 2nd" — it's 2nd from the END -> 40
+```
+
+::: {.callout-warning}
+## The two traps that bite R↔Python switchers
+1. **Negative indices mean opposite things**: R `x[-2]` = "all except the 2nd".
+   Python `x[-2]` = "the 2nd from the end".
+2. **Slices**: R `2:4` includes position 4. Python `1:4` excludes index 4.
+:::
+
+## DataFrames: same idea, different accents
+
+```{webr}
+#| label: df-r
+library(tibble)
+
+df <- tibble(
+  gene = c("BRCA1", "TP53", "MYC", "EGFR"),
+  chr  = c(17, 17, 8, 7),
+  expr = c(12.1, 40.3, 3.2, 8.8)
+)
+
+df$expr            # column as vector
+df[["expr"]]       # same
+df[1, ]            # row 1 (note the comma!)
+df[, c("gene", "expr")]   # columns by name
+df[df$expr > 10, ]        # filter rows by condition
+```
+
+```python
+import pandas as pd
+df = pd.DataFrame({
+  "gene": ["BRCA1", "TP53", "MYC", "EGFR"],
+  "chr":  [17, 17, 8, 7],
+  "expr": [12.1, 40.3, 3.2, 8.8]})
+
+df["expr"]              # column as Series
+df.loc[0]               # row 0 BY LABEL
+df.iloc[0]              # row 0 BY POSITION
+df[["gene", "expr"]]    # columns by name
+df[df["expr"] > 10]     # filter rows
+```
+
+::: {.callout-tip}
+## pandas `.loc` vs `.iloc` — one sentence each
+`.loc` = **labels** (row names / names). `.iloc` = **integers** (positions).
+R's `df[1, ]` is position- and label-based at once, which is why pandas needs two.
+:::
+
+## NA vs NULL vs NaN vs None
+
+| | R | Python/pandas | Meaning |
+|---|---|---|---|
+| missing value | `NA` | `np.nan`, `pd.NA` | "should be data, isn't" |
+| nothing at all | `NULL` | `None` | "no object" |
+| bad arithmetic | `NaN` | `nan` | 0/0, sqrt(-1) |
+
+```{webr}
+#| label: na-r
+v <- c(1, NA, 3)
+
+mean(v)                 # NA spreads!
+mean(v, na.rm = TRUE)   # 2
+is.na(v)                # where are the NAs?
+is.null(v)              # FALSE — v exists, it has a hole
+```
+
+```python
+import numpy as np, pandas as pd
+v = pd.Series([1, np.nan, 3])
+
+v.mean()            # pandas SKIPS nan by default (opposite default!)
+v.isna()            # where are the NAs?
+```
+
+::: {.callout-important}
+## Default-behavior flip worth memorizing
+`mean(na.rm = FALSE)` is R's default — **you** opt out of NAs.
+pandas `.mean()` **skips NaN by default** — you opt in.
+Silent-source-of-wrong-results #1 in cross-language projects.
+:::
+
+## Growing objects: don't
+
+```r
+# ❌ AI-smell: quadratic-time growing
+out <- c()
+for (f in files) out <- c(out, read_one(f))
+```
+
+```r
+# ✅ collect in a list, bind once
+out <- map(files, read_one) |> list_rbind()
+```
+
+```python
+# ✅ same shape in Python: build a list of frames, concat once
+out = pd.concat([read_one(f) for f in files])
+```
+
+## Drills (live pad)
+
+```{webr}
+#| label: drills
+lst <- list(id = "sample_42", reads = c(100, 250, 175), qc = TRUE)
+
+# 1. Get "sample_42" two different ways
+
+# 2. Get the SECOND read (250)
+
+# 3. What is lst[2]?  What is lst[[2]]?  Predict, then run.
+
+# 4. Vector v <- c(5, NA, 12, NA, 3): count the NAs, then mean ignoring them
+
+# 5. mtcars: select rows where cyl == 6, only columns mpg and wt
+```
+
+::: {.callout-tip collapse="true"}
+## Expected answers
+1. `lst$id` or `lst[["id"]]`
+2. `lst$reads[2]`
+3. `lst[2]` is a list of length 1; `lst[[2]]` is the numeric vector
+4. `sum(is.na(v))`, `mean(v, na.rm = TRUE)`
+5. `mtcars[mtcars$cyl == 6, c("mpg", "wt")]` — or `filter(mtcars, cyl == 6) |> select(mpg, wt)`
+:::
+
+## Exercises
+
+### Exercise 1 — predict the type
+
+```{webr}
+#| exercise: ex-d2-coerce
+# What will typeof() print for each? Write your guess as a comment,
+# then run and compare:
+typeof(c(1, "a"))
+typeof(c(TRUE, FALSE, 1))
+typeof(list(1, "a"))
+```
+
+::: {.hint exercise="ex-d2-coerce"}
+Coercion order: logical → integer → double → character. Lists never coerce.
+:::
+
+::: {.solution exercise="ex-d2-coerce"}
+```r
+typeof(c(1, "a"))           # "character" — 1 was coerced
+typeof(c(TRUE, FALSE, 1))   # "double" — TRUE/FALSE became 1/0
+typeof(list(1, "a"))        # "list" — no coercion ever
+```
+:::
+
+### Exercise 2 — negative indexing duel
+
+Same goal in both dialects: **drop** the second element of `c(10, 20, 30)`.
+
+```{webr}
+#| exercise: ex-d2-neg
+x <- c(10, 20, 30)
+# R: one character, drop the 2nd element
+______
+```
+
+::: {.hint exercise="ex-d2-neg"}
+R: `x[-2]`.
+:::
+
+::: {.solution exercise="ex-d2-neg"}
+```r
+x[-2]        # 10 30
+# Python for the same job:  [10, 20, 30];  x.pop(1)  or  x[:1] + x[2:]
+# Python's x[-2] would return 20 — the second from the END. Total opposite.
+```
+:::
+
+### Exercise 3 — DataFrame indexing gymnastics
+
+```{webr}
+#| exercise: ex-d2-df
+library(tibble)
+df <- tibble(gene = c("BRCA1", "TP53", "MYC", "EGFR"),
+             expr = c(12.1, 40.3, 3.2, 8.8))
+
+# a) expr of TP53 by name (one expression)
+# b) the whole ROW of MYC
+# c) genes with expr > 10, as a character vector
+______
+```
+
+::: {.hint exercise="ex-d2-df"}
+a) `df$expr[df$gene == "TP53"]` · b) `df[df$gene == "MYC", ]` ·
+c) `df$gene[df$expr > 10]`
+:::
+
+::: {.solution exercise="ex-d2-df"}
+```r
+df$expr[df$gene == "TP53"]   # 40.3
+df[df$gene == "MYC", ]
+df$gene[df$expr > 10]        # "BRCA1" "TP53"
+```
+:::
+
+## Wrap-up checklist
+
+- [ ] `[` keeps the container, `[[` returns contents
+- [ ] R negative index = exclude; Python negative index = from the end
+- [ ] R slices are inclusive (`2:4`), Python exclusive (`1:4`)
+- [ ] `NA` spreads in R math by default; pandas skips it by default
+- [ ] Never grow vectors/frames in loops — collect then bind
+
+**Tomorrow:** control flow + writing functions that guard their inputs.
