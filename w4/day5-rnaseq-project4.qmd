@@ -2,10 +2,10 @@
 title: "Day 5 — Bulk RNA-seq + Project 4"
 subtitle: "Week 4 · counts → DESeq2/edgeR (🧊 frozen) → your classifier meets the DE results"
 resources:
-  - data/p4/expr.csv
-  - data/p4/labels.csv
-  - data/rnaseq/counts.csv
-  - data/rnaseq/coldata.csv
+  - ../data/p4/expr.csv
+  - ../data/p4/labels.csv
+  - ../data/rnaseq/counts.csv
+  - ../data/rnaseq/coldata.csv
 ---
 
 ## Cheat sheet (90 seconds)

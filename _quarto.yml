@@ -1,5 +1,10 @@
 project:
   type: website
+  resources:
+    - data/p4/expr.csv
+    - data/p4/labels.csv
+    - data/rnaseq/counts.csv
+    - data/rnaseq/coldata.csv
   render:
     - "*.qmd"
     - "!PLAN.md"

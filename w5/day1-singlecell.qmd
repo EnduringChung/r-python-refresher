@@ -1,0 +1,535 @@
+---
+title: "Day 1 — Single-cell Core"
+subtitle: "Week 5 · the scanpy pipeline demystified: QC → normalize → HVG → PCA → graph → clusters"
+---
+
+## Cheat sheet (60 seconds)
+
+| Step | scanpy | Seurat | What it actually is (today's live version) |
+|---|---|---|---|
+| QC metrics | `sc.pp.calculate_qc_metrics` | `PercentageFeatureSet` | counts per cell, genes per cell — filters |
+| normalize | `sc.pp.normalize_total(target_sum=1e4)` | `LogNormalize` | divide by depth, scale to a constant |
+| log | `sc.pp.log1p` | (same call) | `log(1 + x)` — un-skews count noise |
+| HVGs | `sc.pp.highly_variable_genes(n_top_genes=...)` | `FindVariableFeatures` | top-k variance (or dispersion) genes |
+| PCA | `sc.tl.pca` | `RunPCA` | SVD on the scaled HVG matrix |
+| kNN graph | `sc.pp.neighbors(n_neighbors=15)` | `FindNeighbors` | distances in PC space |
+| clusters | `sc.tl.leiden` | `FindClusters` | community detection on that graph |
+| 2D plot | `sc.tl.umap` + `sc.pl.umap` | `RunUMAP` | nonlinear embedding for *display only* |
+| markers | `sc.tl.rank_genes_groups` | `FindAllMarkers` | per-cluster DE — names the type |
+
+::: {.callout-note}
+## Tier warning — how today runs
+scanpy/Seurat themselves **cannot run in this page** (compiled deps). So we
+run every step **live in numpy** on a small seeded dataset — same math, full
+transparency — then the box at the end maps each step to the real packages
+(`scripts/singlecell/` has both, ready for Colab or your machine).
+:::
+
+## The problem: counts are mostly sequencing depth
+
+A cell with 2× reads shows 2× counts for *every* gene. Raw counts therefore
+cluster cells by **depth**, not type — the single-cell equivalent of W2's
+"plot before you test". The pipeline exists to delete depth and keep biology:
+
+1. **QC** — remove broken cells and uninformative genes
+2. **Normalize + log** — cancel depth, tame the skew
+3. **HVG** — keep genes that *vary* (signal carriers)
+4. **PCA** — compress correlated variation
+5. **Graph + cluster** — group similar cells
+6. **Annotate** — name clusters with marker genes (never skip this)
+
+## The seeded synthetic dataset
+
+Three hidden cell types, 200 genes, 180 cells. Marker genes are ON in exactly
+one type; housekeeping genes are pure noise. **The type labels are used only
+to score the pipeline at the end** — a real analysis doesn't have them:
+
+```{pyodide}
+#| label: make-data
+import numpy as np
+import pandas as pd
+
+rng = np.random.default_rng(5)
+
+n_per, n_markers, n_hk = 60, 6, 194
+types = np.repeat(["T-like", "B-like", "Mono-like"], n_per)        # truth
+depth = rng.lognormal(0.0, 0.4, 3 * n_per)                         # per-cell depth
+
+# marker ON/OFF log-fold effects: +2 in its own type, 0 elsewhere
+effects = np.zeros((3 * n_per, n_markers))
+for t in range(3):
+    effects[t * n_per:(t + 1) * n_per, t * 2:(t + 1) * 2] = 2.0
+
+lam_marker = depth[:, None] * 5.0 * np.exp(effects)   # ON ≈ 7.4× the OFF rate
+counts = np.hstack([
+    rng.poisson(lam_marker),
+    rng.poisson(depth[:, None] * 5.0, size=(3 * n_per, n_hk))
+]).astype(float)                                       # + 194 housekeeping genes
+
+genes = ([f"CD{T}" for T in range(1, n_markers + 1)]
+         + [f"HK{i}" for i in range(1, n_hk + 1)])
+adata = pd.DataFrame(counts.astype(int), columns=genes)
+adata["true_type"] = types
+
+print(adata.iloc[:3, :4], "\n")
+print("counts per cell — note the 3x spread (depth):")
+totals = adata[genes].sum(axis=1)
+print(totals.describe().round(1))
+```
+
+## Steps 1–2: QC and normalization
+
+QC keeps cells whose **total counts** look healthy (not empty, not doublets)
+and genes seen in at least a few cells. Normalization divides each cell by
+its depth and rescales, then `log1p` un-skews:
+
+```{pyodide}
+#| label: qc-norm
+X = adata[genes].to_numpy()
+
+total = X.sum(axis=1)
+lo, hi = np.quantile(total, [0.02, 0.98])
+keep_cell = (total > 500) & (total < hi)          # drop empties + extremes
+X = X[keep_cell]; truth = types[keep_cell]
+
+keep_gene = (X > 0).sum(axis=0) >= 3              # gene seen in >= 3 cells
+X = X[:, keep_gene]; gene_names = np.array(genes)[keep_gene]
+
+target = np.median(X.sum(axis=1))                 # normalize to median depth
+Xn = np.log1p(X / X.sum(axis=1, keepdims=True) * target)
+
+print(f"cells: 180 -> {X.shape[0]} kept | genes: 200 -> {X.shape[1]} kept")
+depth_norm = (X / X.sum(axis=1, keepdims=True)).sum(axis=1)
+print("cell totals BEFORE normalization: std =", total.std().round(0))
+print("cell totals AFTER normalization:  std =", depth_norm.std().round(4))
+```
+
+::: {.callout-important}
+## Order is load-bearing
+Normalize **then** log, log **then** HVG. Picking HVGs on raw counts selects
+the *deepest-sequenced* cells' genes — variance in raw space is mostly depth.
+One reversed step and downstream clusters describe the sequencer, not the
+sample. When a scRNA-seq plot shows two blobs where one type should be,
+check: was it normalized before anything else touched it?
+:::
+
+## Step 3–4: HVGs and PCA
+
+Keep the 50 most variable genes post-log, then SVD. numpy gives PCA in three
+lines — `scanpy` calls the same decomposition:
+
+```{pyodide}
+#| label: hvg-pca
+hvg = np.argsort(Xn.var(axis=0))[-50:]            # top-50 variance genes
+Xh = Xn[:, hvg]
+
+Xc = Xh - Xh.mean(axis=0)                          # center
+U, S, Vt = np.linalg.svd(Xc, full_matrices=False)
+pcs = U[:, :4] * S[:4]                             # cell scores on PC1-4
+
+var_explained = (S**2 / (S**2).sum())[:4].round(3)
+print("variance explained PC1-4:", var_explained)
+```
+
+## Step 5: kNN graph + graph clustering
+
+scanpy builds a k-nearest-neighbor graph in PC space and runs Leiden on it.
+Our live version: k=10 neighbors, keep edges shorter than the 90th
+percentile of edge length, then **connected components** via union-find —
+15 lines, no black box:
+
+```{pyodide}
+#| label: graph-cluster
+def knn_graph(X, k=10):
+    d = np.linalg.norm(X[:, None, :] - X[None, :, :], axis=-1)
+    np.fill_diagonal(d, np.inf)
+    idx = np.argsort(d, axis=1)[:, :k]             # k nearest per cell
+    return d, idx
+
+def components(n, edges):
+    parent = list(range(n))
+    def find(i):
+        while parent[i] != i:
+            parent[i] = parent[parent[i]]; i = parent[i]
+        return i
+    for a, b in edges:
+        parent[find(a)] = find(b)
+    return np.array([find(i) for i in parent])
+
+d, nn = knn_graph(pcs, k=10)
+edge_len = d[np.arange(len(d))[:, None], nn]       # length of each kNN edge
+cutoff = np.quantile(edge_len, 0.90)               # drop the longest 10%
+edges = [(i, j) for i in range(len(d)) for j in nn[i] if d[i, j] <= cutoff]
+
+comp = components(len(pcs), edges)
+sizes = pd.Series(comp).value_counts()
+big = sizes[sizes >= 10].index                     # ignore specks
+labels = np.where(np.isin(comp, big), pd.factorize(comp)[0], -1)
+
+from sklearn.metrics import adjusted_rand_score
+ari = adjusted_rand_score(truth, labels)
+print("cluster sizes:", sizes.to_dict())
+print("ARI vs truth:", round(ari, 3))
+```
+
+```{pyodide}
+#| label: plot-pipeline
+import matplotlib.pyplot as plt
+
+fig, axes = plt.subplots(1, 2, figsize=(10, 4), sharex=True, sharey=True)
+for ax, col, vals, title in [
+    (axes[0], "truth", truth, "Ground truth (hidden from the pipeline)"),
+    (axes[1], "found", labels, "Discovered clusters (PC1-PC2)")]:
+    for v in np.unique(vals):
+        m = vals == v
+        ax.scatter(pcs[m, 0], pcs[m, 1], s=14,
+                   label=str(v) if v != -1 else "unassigned")
+    ax.set(title=title, xlabel="PC1", ylabel="PC2")
+    ax.legend(fontsize=7)
+plt.tight_layout(); plt.show()
+```
+
+ARI ≈ 0.93 here means the 20-line pipeline nearly perfectly recovered the
+hidden types (1.0 = identical partition, 0 = chance). On real data you'd now
+run **marker analysis** (`rank_genes_groups`) and *name* the clusters —
+clusters are anonymous until markers name them.
+
+::: {.callout-tip}
+## 🖥️ Run for real (Colab or your machine)
+Same pipeline, production-grade, in `scripts/singlecell/`:
+- `scanpy_workflow.py` — QC → `normalize_total` → `log1p` → HVG → PCA →
+  `neighbors(n_neighbors=15)` → `leiden` → `umap` → `rank_genes_groups`.
+  In Colab: new notebook → `%pip install scanpy leidenalg` → paste.
+- `seurat_workflow.R` — the mirror in Seurat (`SCTransform`, `RunPCA`,
+  `FindNeighbors`, `FindClusters`, `RunUMAP`) for your Mac's RStudio.
+Both scripts are plain top-to-bottom files with the planted-truth ARI
+printed at the end — same experiment as today's cells, real scale.
+:::
+
+## Side-by-side parity: R does the same SVD
+
+The parity thread in bioinformatics clothing — same literal matrix, same
+singular values in both languages:
+
+```{webr}
+#| label: parity-r
+M <- matrix(c(5, 3, 1, 8, 6, 2,
+              7, 9, 4, 2, 5, 8,
+              6, 4, 3, 7, 9, 1,
+              2, 5, 8, 6, 3, 9,
+              9, 1, 5, 4, 7, 3),
+            nrow = 6)
+Mc <- scale(M, center = TRUE, scale = FALSE)     # column-center by hand
+svd(Mc)$d                                        # singular values
+prcomp(M)$sdev * sqrt(nrow(M) - 1)               # identical — same centering
+```
+
+```{pyodide}
+#| label: parity-py
+import numpy as np
+M = np.array([[5, 7, 6, 2, 9],
+              [3, 9, 4, 5, 1],
+              [1, 4, 3, 8, 5],
+              [8, 2, 7, 6, 4],
+              [6, 5, 9, 3, 7],
+              [2, 8, 1, 9, 3]])
+print(np.linalg.svd(M, compute_uv=False).round(6))
+print(np.linalg.svd(M - M.mean(0), compute_uv=False).round(6), " <- centered")
+```
+
+(R `prcomp` reports standard deviations — multiply by √(n−1) to recover the
+singular values of the *centered* matrix, which is what `prcomp` computes
+under the hood. Signs of PCs may flip between runs/languages — the sign is
+arbitrary, the geometry is not.)
+
+## Drills (live pad)
+
+```{pyodide}
+#| label: drills
+import numpy as np
+rng = np.random.default_rng(7)
+X = rng.poisson(3.0, (50, 8)).astype(float)
+
+# 1. totals = X.sum(1) — max/min ratio. Would you QC-filter on it?
+
+# 2. Normalize X to median depth (one expression, keepdims!)
+
+# 3. np.log1p of the normalized matrix — why 1p and not log(x)?
+
+# 4. Row variances after log — top-3 gene indices (argsort trick)
+
+# 5. Center columns; np.linalg.svd with compute_uv=False — how many
+#    singular values for a 50x8 matrix?
+
+# 6. Fraction of variance in PC1: S^2 / sum(S^2)
+
+# 7. Tiny kNN: distances to cell 0 — which 3 cells are nearest?
+
+# 8. adjusted_rand_score([0,0,1,1], [1,1,0,0]) — why 1.0 and not 0?
+
+# 9. Same labels but shuffled [1,0,1,0]? ARI should be negative-ish. Run it.
+
+# 10. Depth effect demo: double one row of raw X, redo 1-2 — which cells
+#     cluster together before normalization? (conceptual, compute totals)
+```
+
+::: {.callout-tip collapse="true"}
+## Expected answers
+1. Summing 8 Poisson(3) genes → ~24 ± 5 per cell, max/min ratio ~1.5 —
+   mild; a real library shows 3–10× and yes, you'd QC on it
+2. `Xn = X / X.sum(1, keepdims=True) * np.median(X.sum(1))`
+3. Zeros stay defined (log(0+1)=0); count noise becomes ~additive
+4. `np.argsort(Xn.var(0))[-3:]` — argsort ascending, take the tail
+5. min(50, 8) = 8
+6. `s[0]**2 / (s**2).sum()` — first PC share
+7. `np.argsort(np.linalg.norm(X - X[0], axis=1))[1:4]` (skip self)
+8. ARI is chance-corrected: a perfect relabeling is still perfect
+9. ≈ −0.5 — worse than chance; ARI can go negative
+10. The doubled row sits alone at high depth — depth dominates raw space
+:::
+
+## Exercises
+
+### Exercise 1 — the doublet filter
+
+Doublets (two cells in one droplet) have ~2× total counts and often land
+between clusters. Implement: flag cells above the 98th percentile of total
+counts, report how many of each true type got flagged. Python:
+
+```{pyodide}
+#| exercise: ex-d1-doublet
+import numpy as np, pandas as pd
+rng = np.random.default_rng(11)
+totals = pd.Series(rng.lognormal(0, 0.3, 300).round(), name="total")
+truth = np.repeat(["A", "B", "C"], 100)
+
+thresh = ______
+flagged = ______
+print("threshold:", thresh, "| flagged:", flagged.sum())
+print(pd.crosstab(truth, flagged))
+```
+
+::: {.hint exercise="ex-d1-doublet"}
+`totals.quantile(0.98)`, then `totals > thresh`.
+:::
+
+::: {.solution exercise="ex-d1-doublet"}
+```python
+thresh = totals.quantile(0.98)
+flagged = totals > thresh
+# ~6 cells flagged, spread across types (depth is type-independent here).
+# In real data doublets concentrate BETWEEN clusters — XGBoost-free check:
+# re-run clustering with flagged cells excluded and compare ARI.
+```
+:::
+
+### Exercise 2 — HVG count sweep (R)
+
+Using the literal matrix from the parity section, compute column variances
+and return the top-3 gene indices. Then repeat after `log1p` — do the top-3
+change?
+
+```{webr}
+#| exercise: ex-d1-hvg-r
+M <- matrix(c(5, 3, 1, 8, 6, 2,
+              7, 9, 4, 2, 5, 8,
+              6, 4, 3, 7, 9, 1,
+              2, 5, 8, 6, 3, 9,
+              9, 1, 5, 4, 7, 3),
+            nrow = 6)
+
+order(______, decreasing = TRUE)[1:3]        # top-3 by raw variance
+order(______, decreasing = TRUE)[1:3]        # top-3 after log1p
+```
+
+::: {.hint exercise="ex-d1-hvg-r"}
+`apply(M, 2, var)` and `apply(log1p(M), 2, var)`.
+:::
+
+::: {.solution exercise="ex-d1-hvg-r"}
+```r
+order(apply(M, 2, var), decreasing = TRUE)[1:3]        # e.g. 5 4 2
+order(apply(log1p(M), 2, var), decreasing = TRUE)[1:3] # 2 4 5 — same set,
+# different order: log compresses big values, so high-count genes lose rank.
+# At 20k genes the *set* changes too — which is why HVG selection happens
+# after log1p in every real pipeline.
+```
+:::
+
+### Exercise 3 — union-find by hand
+
+Tiny graph: 6 nodes, edges (0,1), (1,2), (3,4). How many components? Run
+the day's `components()` and then extend it: add edge (2,3) and re-run.
+
+```{pyodide}
+#| exercise: ex-d1-unionfind
+def components(n, edges):
+    parent = list(range(n))
+    def find(i):
+        while parent[i] != i:
+            parent[i] = parent[parent[i]]; i = parent[i]
+        return i
+    for a, b in edges:
+        parent[find(a)] = find(b)
+    return np.array([find(i) for i in parent])
+
+print(components(6, [(0, 1), (1, 2), (3, 4)]))
+print(components(6, [(0, 1), (1, 2), (3, 4), (2, 3)]))   # after the bridge
+```
+
+::: {.hint exercise="ex-d1-unionfind"}
+Predict: 3 components then 2 — node 5 stays alone forever.
+:::
+
+::: {.solution exercise="ex-d1-unionfind"}
+```python
+# [0 0 0 3 3 5]  -> components {0,1,2}, {3,4}, {5}
+# [0 0 0 0 0 5]  -> the (2,3) edge MERGES two components; 5 is still a
+# singleton — in the clustering step those became "size < 10, unassigned".
+```
+:::
+
+### Exercise 4 — the k sweep
+
+ARI as a function of graph strictness. Rerun the day's graph clustering
+with cutoff quantiles 0.5, 0.7, 0.9, 0.99 and print all four ARIs.
+
+```{pyodide}
+#| exercise: ex-d1-ksweep
+# reuse: pcs, truth, knn_graph, components, adjusted_rand_score from above
+for q in [0.5, 0.7, 0.9, 0.99]:
+    ______
+```
+
+::: {.hint exercise="ex-d1-ksweep"}
+Copy the graph-cell body inside the loop, replacing `0.90` with `q`; print
+`q` and the ARI.
+:::
+
+::: {.solution exercise="ex-d1-ksweep"}
+```python
+for q in [0.5, 0.7, 0.9, 0.99]:
+    d, nn = knn_graph(pcs, k=10)
+    edge_len = d[np.arange(len(d))[:, None], nn]
+    cutoff = np.quantile(edge_len, q)
+    edges = [(i, j) for i in range(len(d)) for j in nn[i] if d[i, j] <= cutoff]
+    comp = components(len(pcs), edges)
+    sizes = pd.Series(comp).value_counts()
+    big = sizes[sizes >= 10].index
+    labels = np.where(np.isin(comp, big), pd.factorize(comp)[0], -1)
+    print(q, "ARI:", round(adjusted_rand_score(truth, labels), 3))
+# 0.5 → 0.63 (over-fragmented: tight cutoff sheds cells into specks) ·
+# 0.7 → 0.84 · 0.9 → 0.93 · 0.99 → 1.0 on this clean toy. Real data has
+# continuous gradients — hence Leiden's resolution parameter instead of a
+# hard cutoff.
+```
+:::
+
+### Exercise 5 — marker naming
+
+Clusters without names are useless. For each discovered cluster, find the
+marker gene with the highest mean normalized expression. (R version —
+`colMeans` per group.)
+
+```{webr}
+#| exercise: ex-d1-markers
+# tiny stand-in: 12 cells, 4 genes, 2 clusters
+M <- matrix(c(9, 8, 1, 4,  2, 3, 7, 9,  8, 1, 2, 9,
+              1, 2, 9, 8,  7, 9, 2, 1,  2, 8, 9, 1,
+              4, 5, 4, 5,  5, 4, 5, 4,  5, 4, 4, 5,
+              5, 4, 5, 4,  4, 5, 4, 5,  4, 5, 5, 4),
+            nrow = 12)
+cluster <- c(1, 1, 2, 2, 1, 1, 2, 2, 2, 1, 2, 1)
+
+t(sapply(split(seq_len(12), cluster), function(ix) {
+  ______        # which gene (column) has max mean in this cluster?
+}))
+```
+
+::: {.hint exercise="ex-d1-markers"}
+`colMeans(M[ix, , drop = FALSE])` inside, then `which.max()` — wrap with
+`colnames(M)[...]` to get names.
+:::
+
+::: {.solution exercise="ex-d1-markers"}
+```r
+t(sapply(split(seq_len(12), cluster), function(ix) {
+  cm <- colMeans(M[ix, , drop = FALSE])
+  c(gene = colnames(M)[which.max(cm)], mean = round(max(cm), 2))
+}))
+# cluster 1 -> column 1 (CD1-like), cluster 2 -> column 2: exactly the
+# scanpy rank_genes_groups move on a diet.
+```
+:::
+
+## Common pitfalls (real ones)
+
+::: {.callout-warning}
+## 1. Clustering raw counts
+The #1 single-cell bug. Depth is the first PC, clusters = sequencing lanes.
+If your UMAP shows batch-lane-shaped islands, normalize before you blame
+biology.
+:::
+
+::: {.callout-warning}
+## 2. HVG before log
+Same disease, earlier onset. Raw variance ranks genes by their mean count;
+post-log variance ranks by actual biological spread.
+:::
+
+::: {.callout-warning}
+## 3. Reading clusters as cell types
+The pipeline returns integers. Without marker evidence, "cluster 3" is not
+"T cells" — it's cluster 3. Today's Exercise 5 (marker naming) is the
+mandatory next step in every real analysis.
+:::
+
+::: {.callout-warning}
+## 4. UMAP distances are not distances
+UMAP preserves local neighborhoods only; the gaps between islands on the
+plot are aesthetic. Quantify with ARI/graph metrics, use UMAP for the
+figure, never for the claim.
+:::
+
+## Self-quiz — predict the output
+
+```{pyodide}
+#| label: quiz
+import numpy as np
+X = np.array([[10., 0., 2.],
+              [12., 1., 1.],
+              [0., 9., 3.],
+              [1., 11., 2.]])
+
+# Q1: what shape does X / X.sum(1, keepdims=True) have, and what is
+#     row 0's sum after normalization?
+
+# Q2: np.log1p(X[:, 0]) — is the result symmetric around its mean?
+
+# Q3: SVD of the centered X: how many singular values?
+
+# Q4: knn graph with k=3 on 4 cells: how many DIRECTED edges?
+
+# Q5: adjusted_rand_score(truth, labels) where labels = truth + 5?
+```
+
+::: {.callout-tip collapse="true"}
+## Quiz answers
+1. (4, 3); every row sums to 1.0 — that's the normalization contract
+2. No — log compresses high values, so the tail bends down; skew shrinks
+3. min(4, 3) = 3
+4. 12 — each cell points at 3 neighbors; symmetrizing makes it ≤ 12 unique
+5. 1.0 — ARI is invariant to label permutations (the Quiz-drill 8 lesson)
+:::
+
+## Wrap-up checklist
+
+- [ ] I can recite the 6 pipeline steps *in order* and say why each exists
+- [ ] I built PCA, a kNN graph, and union-find clustering in raw numpy
+- [ ] Normalize → log → HVG: the order is not a suggestion
+- [ ] Clusters get names from markers, never from integer labels
+- [ ] ARI is my chance-corrected cluster-quality metric
+- [ ] I know where the real packages live: `scripts/singlecell/` + Colab
+
+**Tomorrow:** the cells are clustered — but do they form a *lineage*?
+Diffusion pseudotime, PAGA, and how not to over-interpret a trajectory.

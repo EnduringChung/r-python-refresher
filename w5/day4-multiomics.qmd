@@ -1,0 +1,545 @@
+---
+title: "Day 4 — Multi-omics Integration"
+subtitle: "Week 5 · concatenation, CCA, and batch effects — live; MOFA/DIABLO concepts"
+---
+
+## Cheat sheet (60 seconds)
+
+| Strategy | What it does | R tool | Python tool |
+|---|---|---|---|
+| early fusion (concat) | paste views into one matrix, analyze jointly | base R | `pd.concat` + z-scoring |
+| late fusion | analyze each view, combine *results* (p-values, votes) | `metaRNASeq` | `statsmodels.combine_pvalues` |
+| CCA | linear axes maximizing cross-view correlation | `stats::cancor` | `sklearn.cross_decomposition.CCA` |
+| MOFA | factor model finding variation shared across views | MOFA2 (Bioconductor) | mofapy2 — **frozen tier** |
+| DIABLO | sparse PLS with discriminant aim, multi-block | `mixOmics` | — **frozen tier** |
+| WNN | per-cell view weighting (RNA vs protein) | — | scanpy external / Seurat v4 |
+| batch control | remove technical chunks | `ComBat` (sva) | `harmonypy`, `bbknn` |
+
+::: {.callout-note}
+## Tier warning
+CCA, concatenation, and batch diagnostics run **live** below. MOFA and
+DIABLO are compiled R/Python stacks — they stay conceptual here (frozen
+tier), with pointers at the end.
+:::
+
+## The shared-latency idea
+
+Multi-omics works when two views of the same samples carry overlapping
+biology: an undiscovered latent factor `z` (cell-cycle? disease severity?)
+leaks into both RNA and protein. Integration asks: *how much of view 1 and
+view 2 is the same `z`?* — and batch effects are the great impostor,
+pretending to be shared biology.
+
+Seeded synthetic truth: 120 samples, latent `z` from 3 groups (the real
+biology), two views of 30 features each, moderate noise — then a batch
+effect we can toggle:
+
+```{pyodide}
+#| label: make-multiomics
+import numpy as np
+import pandas as pd
+
+rng = np.random.default_rng(14)
+n = 120
+
+z = rng.normal(size=n)                                # latent biology
+group = np.digitize(z, [-0.5, 0.5])                   # 3 groups along z
+batch = np.repeat(["B1", "B2"], 60)                   # technical chunk
+
+view1 = 2.0 * z[:, None] + rng.normal(0, 1.0, (n, 30))   # RNA-like
+view2 = 1.5 * z[:, None] + rng.normal(0, 1.2, (n, 30))   # protein-like
+# batch shifts a FEW features (technical), not the whole view:
+view1[:, -3:] += (batch == "B2")[:, None] * 1.2
+view2[:, -3:] += (batch == "B2")[:, None] * 0.8
+
+v1 = pd.DataFrame(view1, columns=[f"RNA{i}" for i in range(30)])
+v2 = pd.DataFrame(view2, columns=[f"PROT{i}" for i in range(30)])
+meta = pd.DataFrame({"z": z.round(3), "group": group, "batch": batch})
+
+print(meta.groupby(["batch", "group"]).size().unstack())
+```
+
+The design is **balanced** — both batches contain all three groups. Watch
+what that buys you later.
+
+## Naive concatenation vs scaled concatenation
+
+Pasting the views side by side without scaling lets the louder view own all
+the variance. Z-score each view first — then one joint PCA sees both:
+
+```{pyodide}
+#| label: concat-pca
+import matplotlib.pyplot as plt
+from sklearn.decomposition import PCA
+from scipy.stats import spearmanr
+
+def zscore(M):
+    return (M - M.mean(0)) / M.std(0)
+
+raw = np.hstack([v1.to_numpy(), v2.to_numpy()])           # naive
+scaled = np.hstack([zscore(v1.to_numpy()), zscore(v2.to_numpy())])
+
+fig, axes = plt.subplots(1, 2, figsize=(11, 4))
+for ax, M, title in [(axes[0], raw, "naive concat"),
+                     (axes[1], scaled, "z-scored concat")]:
+    pcs = PCA(2).fit_transform(M)
+    sc = ax.scatter(pcs[:, 0], pcs[:, 1], c=z, cmap="coolwarm", s=18)
+    ax.set(title=title, xlabel="PC1", ylabel="PC2")
+plt.colorbar(sc, ax=axes[1]); plt.tight_layout(); plt.show()
+
+for name, M in [("naive", raw), ("scaled", scaled)]:
+    p1 = PCA(1).fit_transform(M)[:, 0]
+    print(name, "PC1 vs latent z: rho =", round(spearmanr(z, p1).statistic, 3))
+```
+
+Both recover the latent axis here because the views were born with similar
+scales — real RNA (counts in thousands) vs protein (arbitrary units) will
+not be. **Z-score per view is the minimum entry fee for early fusion.**
+
+## CCA: the correlation-maximizing axes
+
+PCA finds variance *within* one matrix. CCA finds pairs of axes — one per
+view — that **correlate maximally across views**. That's the right question
+for multi-omics: not "what varies", but "what varies *together*":
+
+```{pyodide}
+#| label: cca-live
+from sklearn.cross_decomposition import CCA
+from scipy.stats import pearsonr
+
+cca = CCA(n_components=2)
+u, w = cca.fit_transform(zscore(v1.to_numpy()), zscore(v2.to_numpy()))
+
+for i in range(2):
+    r = pearsonr(u[:, i], w[:, i]).statistic
+    print(f"canonical correlation {i+1}: {r:.3f}")
+print("canonical variate 1 vs TRUE z: rho =",
+      round(pearsonr(u[:, 0], z).statistic, 3))
+```
+
+CCA finds correlated axes; on 30-vs-30 features with 120 samples it can
+also *overfit* — canonical correlation 1 comes out at ~0.99, way above what
+the shared signal (~0.83 given the noise) could justify. The honest readout
+is the second number: the canonical variate tracks the latent z at
+ρ ≈ −0.99 (sign is arbitrary) — an axis you never observed, recovered from
+two noisy views. With real -omics dimensions, use regularization
+(`sklearn` CCA's `scale`/fewer components, or sparse CCA in `mixOmics`) and
+validate on held-out samples.
+
+## The batch impostor: balanced vs confounded
+
+Now the experiment every multi-omics paper should show. Add a batch effect
+and ask three questions: does naive analysis mistake batch for biology?
+does scaling fix it? and what happens when batch is **confounded** with
+biology (all B2 samples are one group)?
+
+```{pyodide}
+#| label: batch-demo
+from sklearn.metrics import adjusted_rand_score
+from sklearn.cluster import KMeans
+
+def cluster_ari(M, truth, seed=42):
+    km = KMeans(3, n_init=10, random_state=seed).fit(zscore(M))
+    return adjusted_rand_score(truth, km.labels_)
+
+# scenario 1: current balanced data — batch shift is small
+print("balanced, naive concat ARI:",
+      round(cluster_ari(raw, group), 3))
+
+# scenario 2: confounded — every group-2 sample is in B2 (perfect overlap),
+# and the new instrument shifts 3 features by 4 sd
+conf_batch = np.where(group == 2, "B2", "B1")
+v1c = v1.copy(); v1c.iloc[np.where(conf_batch == "B2")[0], -3:] += 4.0
+rawc = np.hstack([v1c.to_numpy(), v2.to_numpy()])
+km = KMeans(2, n_init=10, random_state=42).fit(zscore(rawc))
+print("clusters vs BATCH labels ARI:",
+      round(adjusted_rand_score(conf_batch, km.labels_), 3))
+print("clusters vs (group==2) ARI:   ",
+      round(adjusted_rand_score((group == 2).astype(int), km.labels_), 3))
+```
+
+The two ARIs print the **same number** — with perfect confounding, "batch"
+and "group 2 vs rest" are one identical partition, so no clustering (or
+CCA, or MOFA factor) can be attributed to one rather than the other. The
+clusters aren't wrong because they found batch instead of biology; they're
+uninterpretable because there is a single axis wearing both labels.
+
+::: {.callout-important}
+## The confounding law
+With perfect confounding, **batch and biology are mathematically
+indistinguishable** — no algorithm (ComBat, Harmony, MOFA, prayer) can
+unsplit them; anything it "removes" removes real signal too. ComBat and
+friends work on *balanced* designs by estimating batch effects within
+biological groups. The fix happens at the bench: balance your design
+before you sequence, not after you plot.
+:::
+
+## MOFA and DIABLO, in five sentences each
+
+::: {.callout-note}
+## MOFA2 (frozen tier)
+A Bayesian factor model: find a small set of latent factors, each
+decomposed into view-specific weights, with automatic "this factor is
+shared / view-specific / technical" attribution. You get Day 2-style
+latent axes with uncertainty, multi-view awareness built in. Runs as
+MOFA2 (R/Bioconductor) + mofapy2 (Python backend) — local install; on
+iPad use a Colab notebook. Read the factors like Day 2 pseudotime axes:
+biological only if annotated so.
+:::
+
+::: {.callout-note}
+## DIABLO / mixOmics (frozen tier)
+Sparse PLS with a discriminant twist: find small feature sets *per view*
+that jointly predict a class label. Where MOFA is unsupervised, DIABLO
+needs your groups up front and returns biomarker panels. R's `mixOmics`
+package is the canonical implementation — a local RStudio job; the
+tutorial datasets (breast.VEIS, TCIA) mirror today's two-view setup at
+real scale.
+:::
+
+## The R twin: `cancor` is built in
+
+R ships CCA in base stats — same question, exact linear algebra:
+
+```{webr}
+#| label: cancor-r
+# small literal two-view matrix (6 samples x 3 features per view)
+X1 <- matrix(c(1.2, 0.8, -0.5, -1.0, 0.3, -0.8,
+               0.9, 0.5, -0.2, -0.8, 0.1, -0.6,
+               2.0, 1.1, -0.9, -1.8, 0.6, -1.5),
+             nrow = 6)
+X2 <- matrix(c(0.8, 0.6, -0.3, -0.7, 0.2, -0.5,
+               1.5, 0.9, -0.6, -1.2, 0.4, -1.0,
+               0.5, 0.3, -0.1, -0.4, 0.1, -0.3),
+             nrow = 6)
+
+cc <- cancor(X1, X2)
+round(cc$cor, 4)                 # canonical correlations
+```
+
+```{pyodide}
+#| label: cca-py-twin
+import numpy as np
+from sklearn.cross_decomposition import CCA
+from scipy.stats import pearsonr
+
+X1 = np.array([[1.2, 0.9, 2.0], [0.8, 0.5, 1.1], [-0.5, -0.2, -0.9],
+               [-1.0, -0.8, -1.8], [0.3, 0.1, 0.6], [-0.8, -0.6, -1.5]])
+X2 = np.array([[0.8, 1.5, 0.5], [0.6, 0.9, 0.3], [-0.3, -0.6, -0.1],
+               [-0.7, -1.2, -0.4], [0.2, 0.4, 0.1], [-0.5, -1.0, -0.3]])
+
+u, w = CCA(n_components=2).fit_transform(
+    (X1 - X1.mean(0)) / X1.std(0), (X2 - X2.mean(0)) / X2.std(0))
+print(round(pearsonr(u[:, 0], w[:, 0]).statistic, 4))
+print(round(pearsonr(u[:, 1], w[:, 1]).statistic, 4))
+```
+
+sklearn's CCA is regularized (PLS-flavored) while R's `cancor` is exact —
+on a small clean matrix they agree to ~2–3 decimals (signs of axes may
+flip; canonical correlations are sign-free). That's the parity checkpoint.
+
+## Drills (live pad)
+
+```{pyodide}
+#| label: drills
+import numpy as np
+from scipy.stats import pearsonr
+rng = np.random.default_rng(2)
+x = rng.normal(size=100)
+y = 0.6 * x + rng.normal(0, 0.8, 100)
+
+# 1. pearsonr(x, y) — square the r. What does r^2 mean here?
+
+# 2. Z-score y with a DIFFERENT mean/scale: 5*y + 50 — does pearsonr
+#    change? Why is that the whole point of z-scoring before concat?
+
+# 3. Add a batch column b = (x > 0) to the mix: pearsonr(b, y)?
+#    Is y now 'explained' by biology or by batch?
+
+# 4. z-score two views then hstack — what is the TOTAL variance of the
+#    result per feature? (why does this stop loud-view domination)
+
+# 5. CCA with n_components=2 on 30-feature views: what are the maximum
+#    possible number of canonical pairs? min(n, p, q)?
+
+# 6. If canonical correlation 1 = 0.05, what is the integration story?
+
+# 7. np.corrcoef of the two canonical variates u[:,0], w[:,0] vs
+#    pearsonr — same number? (they should be; canonical variates are
+#    linear in the data)
+
+# 8. Adjusted_rand_score([0,0,1,1,2,2], [2,2,0,0,1,1])?
+
+# 9. A MOFA factor has high weights in RNA but not protein — shared or
+#    view-specific? Name one biological process that behaves this way.
+
+# 10. Perfect confounding: batch == group exactly. ComBat removes the
+#     batch axis. What else did it remove?
+```
+
+::: {.callout-tip collapse="true"}
+## Expected answers
+1. ≈ 0.34 — shared variance fraction; CCA's canonical correlation² is the
+   multi-view version of the same idea
+2. Unchanged — Pearson is scale/location invariant; that invariance is why
+   z-scoring can't hurt correlations but fixes variance domination
+3. r ≈ 0.45 — both true: y correlates with the biology (x) AND the batch;
+   correlation alone cannot tell you which is which
+4. Each feature: mean 0, sd 1 — every view contributes equal variance
+5. min(n_samples, p, q) = min(120, 30, 30) = 30 pairs possible; you use 2
+6. "These views don't share biology at this resolution" — a publishable
+   negative result, not a bug
+7. Yes — same |r|; sign may differ if a variate flips
+8. 1.0 — ARI is label-permutation invariant (Week 1's drill, still true)
+9. View-specific — e.g. alternative splicing (RNA-only) or protein
+   degradation (protein-only); shared would be cell cycle
+10. The biology. Perfect confounding = one axis total; "removing batch"
+    and "removing group" are the same subtraction
+:::
+
+## Exercises
+
+### Exercise 1 — build the loud-view failure
+
+Give view 2 a 1000× scale, concat naively, and show PC1 no longer tracks
+the shared latent z — then fix with per-view z-scoring. Python:
+
+```{pyodide}
+#| exercise: ex-d4-loud
+import numpy as np
+from sklearn.decomposition import PCA
+from scipy.stats import spearmanr
+
+rng = np.random.default_rng(6)
+n = 100
+z_true = rng.normal(0, 1, n)                        # latent biology
+v1s = z_true[:, None] + rng.normal(0, 1, (n, 20))   # RNA: real signal
+v2s = 1000 * rng.normal(0, 1, (n, 20))              # protein panel: junk,
+                                                    # but in huge units
+naive_pcs = ______
+print("naive PC1 vs latent z: rho =",
+      round(abs(spearmanr(naive_pcs[:, 0], z_true).statistic), 3))
+scaled = ______
+print("scaled PC1 vs latent z: rho =",
+      round(abs(spearmanr(PCA(2).fit_transform(scaled)[:, 0], z_true).statistic), 3))
+```
+
+::: {.hint exercise="ex-d4-loud"}
+`PCA(2).fit_transform(np.hstack([v1s, v2s]))` for both, with
+`(M - M.mean(0)) / M.std(0)` per view before the scaled hstack.
+:::
+
+::: {.solution exercise="ex-d4-loud"}
+```python
+naive_pcs = PCA(2).fit_transform(np.hstack([v1s, v2s]))
+scaled = np.hstack([(v1s - v1s.mean(0)) / v1s.std(0),
+                    (v2s - v2s.mean(0)) / v2s.std(0)])
+# naive: rho ≈ 0.1-0.2 — PC1 is owned by the loud junk panel; the entire
+# signal lives in features that are 1000x quieter. scaled: rho ≈ 0.9+ —
+# z-scoring equalizes the views and PC1 becomes the latent axis again.
+# A view with huge units and zero biology beats a good view every time —
+# unless you scale first.
+```
+:::
+
+### Exercise 2 — CCA on the confounded data
+
+Run the Day's CCA on the *confounded* scenario and check what canonical
+variate 1 correlates with: the group-2 partition, batch, or both? (Python.)
+
+```{pyodide}
+#| exercise: ex-d4-cca-conf
+# reuse v1c, conf_batch, group, zscore from the lesson cells
+from sklearn.cross_decomposition import CCA
+from scipy.stats import pearsonr
+
+u, w = CCA(n_components=1).fit_transform(
+    ______, ______)
+g2 = (group == 2).astype(int)
+print("can.var1 vs (group==2):", round(pearsonr(u[:, 0], g2).statistic, 3))
+print("can.var1 vs batch:     ", round(pearsonr(u[:, 0], (conf_batch == "B2")).statistic, 3))
+```
+
+::: {.hint exercise="ex-d4-cca-conf"}
+`zscore(v1c.to_numpy())` and `zscore(v2.to_numpy())`.
+:::
+
+::: {.solution exercise="ex-d4-cca-conf"}
+```python
+u, w = CCA(n_components=1).fit_transform(
+    zscore(v1c.to_numpy()), zscore(v2.to_numpy()))
+# The two correlations print IDENTICAL to 3 decimals — because in this
+# design "group 2" and "batch B2" label the same samples. CCA found the
+# correlation it was asked to find; it cannot tell you which label it
+# represents. Only the bench can unconfound.
+```
+:::
+
+### Exercise 3 — a manual ComBat sketch (R)
+
+Within-batch standardization: for each feature, subtract the batch mean
+(keeping global structure). On a small literal matrix with 2 batches,
+compute batch-corrected values and verify each batch column-mean is now 0.
+
+```{webr}
+#| exercise: ex-d4-combat-r
+M <- matrix(c(10, 12, 9, 11, 20, 22, 19, 21,
+              5, 6, 4, 5,  8, 9,  7, 8),
+            nrow = 8, byrow = TRUE)
+batch <- c(1, 1, 1, 1, 2, 2, 2, 2)
+
+M_corr <- ______                      # subtract each batch's column means
+round(colMeans(M_corr[batch == 1, ]), 6)   # all 0?
+round(colMeans(M_corr[batch == 2, ]), 6)
+```
+
+::: {.hint exercise="ex-d4-combat-r"}
+`M_corr <- M - ave(x = M, batch, FUN = colMeans)[, , drop = TRUE]` is
+fiddly — simpler with a loop or `sapply(split(seq_len(8), batch),
+function(ix) ...)`; or `M - model.matrix(~0 + factor(batch)) %*%
+aggregate(M, list(batch), mean)[, -1]`. Any correct version counts.
+:::
+
+::: {.solution exercise="ex-d4-combat-r"}
+```r
+bc <- aggregate(M, list(batch = batch), mean)        # 2 x 3 batch means
+shift <- bc[match(batch, bc$batch), -1]              # per-row batch mean
+M_corr <- M - as.matrix(shift)
+round(colMeans(M_corr[batch == 1, ]), 6)   # 0 0 0
+round(colMeans(M_corr[batch == 2, ]), 6)   # 0 0 0
+# This is mean-only ComBat. Real ComBat also scales by batch sd and
+# shrinks estimates with an empirical-Bayes prior — the concept is here.
+# Note what it ASSUMES: both batches contain the same biology (they do,
+# rows 1-4 vs 5-8 were drawn identically). Confounded designs break it.
+```
+:::
+
+### Exercise 4 — late fusion: combine the p-values
+
+Test each view separately (correlation of each feature with z), then
+combine the two views' *strongest* p-values with Fisher's method
+(`combine_pvalues`). Python:
+
+```{pyodide}
+#| exercise: ex-d4-latefusion
+from scipy.stats import combine_pvalues, pearsonr
+
+def view_p(view):
+    ps = [pearsonr(view[:, j], z).pvalue for j in range(view.shape[1])]
+    return min(ps)
+
+p1, p2 = view_p(v1.to_numpy()), view_p(v2.to_numpy())
+stat, p_comb = combine_pvalues(______, method="fisher")
+print("view1 best p:", f"{p1:.2g}", "| view2 best p:", f"{p2:.2g}")
+print("Fisher combined:", f"{p_comb:.2g}")
+```
+
+::: {.hint exercise="ex-d4-latefusion"}
+`combine_pvalues([p1, p2], method="fisher")`.
+:::
+
+::: {.solution exercise="ex-d4-latefusion"}
+```python
+stat, p_comb = combine_pvalues([p1, p2], method="fisher")
+# Both views independently detect the latent biology (~1e-20-ish each on
+# this seed); Fisher's combined p is smaller than either. Late fusion is
+# this simple — and this blind to cross-view structure that CCA/MOFA see.
+```
+:::
+
+### Exercise 5 — the reviewer audit
+
+A paper claims: "Multi-omics integration revealed a protein axis
+independent of RNA." Their design: treated samples were run on the new
+mass-spec machine, controls on the old one. Write the two-sentence review.
+(Comment pad — no code needed.)
+
+```{pyodide}
+#| exercise: ex-d5-audit
+print("""
+Review: ______
+""")
+```
+
+::: {.hint exercise="ex-d5-audit"}
+Confounding law + what "independent of RNA" would require as evidence.
+:::
+
+::: {.solution exercise="ex-d5-audit"}
+```text
+Review: The instrument change is perfectly confounded with treatment, so
+any treatment-associated 'protein axis' is indistinguishable from a batch
+effect — no computational correction can separate them post hoc (Day 4,
+the confounding law). Please re-run the mass-spec on a balanced subset
+(both treatments on both instruments) or demonstrate the axis within a
+single instrument before claiming RNA-independent biology.
+```
+:::
+
+## Common pitfalls (real ones)
+
+::: {.callout-warning}
+## 1. Concat without scaling
+The 1000×-unit view owns every PC. Per-view z-scoring (or similar) before
+early fusion is not optional hygiene — it decides what the PCA sees.
+:::
+
+::: {.callout-warning}
+## 2. Integration of confounded designs
+The most expensive mistake in multi-omics: weeks of integration on data
+where batch == biology. Detect it first — crosstab batch × group and look
+for zeros. The crosstab costs 10 seconds; the paper retraction costs years.
+:::
+
+::: {.callout-warning}
+## 3. Canonical correlation read as causation
+CCA finds correlated axes; the correlation can be shared biology, shared
+batch, shared preprocessing artifacts, or population structure. Annotate
+the canonical variate (does it correlate with known markers?) before
+naming it.
+:::
+
+## Self-quiz — predict the output
+
+```{pyodide}
+#| label: quiz
+# Q1: zscore = lambda M: (M - M.mean(0)) / M.std(0)
+#     zscore(np.array([[1., 1000.], [3., 3000.]])).std(0)
+
+# Q2: CCA(n_components=3) on views with 2 features each — errors?
+
+# Q3: cancor returns 6 canonical correlations for views of 30 and 30
+#     features with 120 samples — wait, how many does R actually return?
+
+# Q4: pearsonr of two z-scored columns of the SAME feature across views
+#     (identical column pasted twice) — r, and its CCA flavor?
+
+# Q5: batch perfectly balanced (every group in every batch). Is ComBat
+#     guaranteed safe here — what could still go wrong?
+```
+
+::: {.callout-tip collapse="true"}
+## Quiz answers
+1. [1, 1] — z-scoring forces sd 1; means/scales are gone, only shape left
+2. Yes-ish: sklearn raises when n_components > min(features) (2 < 3) —
+   canonical pairs are capped by the smaller view
+3. min(p, q) = 30 — R returns all of them; most are noise. Look at the
+   first few + their p-values, never all 30
+4. r = 1.0 — and CCA will happily "discover" this perfect axis; pasted
+   columns are the trivial fake-integration trap (QC your features!)
+5. Not guaranteed: if a *feature's* dropout pattern happens to align with
+   batch within one group, correction can still distort that feature.
+   Balance helps; looking at your data helps more
+:::
+
+## Wrap-up checklist
+
+- [ ] Early fusion needs per-view scaling; loud units are not biology
+- [ ] CCA asks the multi-omics question: what varies TOGETHER
+- [ ] The crosstab of batch × group before any integration — always
+- [ ] Perfect confounding is unfixable by software; fix it at the bench
+- [ ] MOFA = unsupervised shared factors; DIABLO = supervised sparse PLS
+- [ ] I can sketch within-batch correction and say what it assumes
+
+**Friday:** the capstone — everything from five weeks in one published
+mini-study.

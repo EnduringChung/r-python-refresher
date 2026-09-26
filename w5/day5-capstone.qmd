@@ -1,0 +1,170 @@
+---
+title: "Day 5 — Capstone"
+subtitle: "Week 5 · one dataset, five weeks of skills, one published mini-study"
+---
+
+## The brief
+
+You have a two-view dataset (RNA-like counts + protein-like abundances) on
+180 samples from three biological groups, assayed in two batches, with a
+planted signature you must *discover* — not one you were told. Build the
+full analysis and publish it as a Quarto report.
+
+::: {.callout-note}
+## The dataset (checked in, seeded, reproducible)
+
+| File | Contents |
+|---|---|
+| `data/capstone_rna_counts.csv` | 180 samples × 1000 genes, raw integer counts with depth variation and dropout |
+| `data/capstone_protein.csv` | 180 samples × 100 proteins (log-scale abundances) |
+| `data/capstone_meta.csv` | `sample_id`, `condition` (control/treated), `cell_type` (3 types), `batch` (B1/B2) |
+
+Regenerate any time: `python3 scripts/capstone/generate_data.py` (seed
+2026). The generator is the ground-truth receipt — read it *after* your
+analysis to check what you recovered, never before to tune toward.
+:::
+
+## Deliverables
+
+1. **`report.qmd` → `report.html`** — the analysis as a Quarto document
+   (starter: `projects/p5/report-starter.qmd`)
+2. **`analysis.py`** — the runnable pipeline behind every number in the
+   report (starter: `projects/p5/starter.py`)
+3. **The receipt** — seed, package versions, run date, data checksums
+
+## Required sections (in this order)
+
+### 1. Setup
+Load packages; set `default_rng(2026)`; read the three files; print
+dimensions; state the analysis question in one sentence.
+
+### 2. QC
+- Per-sample totals (RNA): flag samples outside the [Q1 − 1.5·IQR,
+  Q3 + 1.5·IQR] fence — report how many and *which batch* they come from
+- Per-gene detection: drop genes detected (< 10 counts) in fewer than 20
+  samples — report how many of 1000 survive
+- Protein view: report the value range; flag samples with > 5% missing
+
+### 3. Normalization + EDA
+- RNA: CPM-style normalize to median total, log1p
+- Histogram of log-expression (Day 3 pre-flight rules apply: labels, bins,
+  title-says-the-finding)
+- PCA of the RNA view — color by condition, then by batch, then by
+  cell_type. **Say honestly which structure dominates PC1** (this is a
+  designed surprise — do not skip it, and do not hide it)
+
+### 4. Differential expression
+- Welch t-test per gene: treated vs control, on log-expression
+- Multiple testing: Benjamini–Hochberg FDR over all 1000 genes
+- Report: how many genes at FDR < 0.05; a volcano plot (log2FC vs −log10 FDR)
+- **Batch check**: repeat the DE contrast *within* each batch. Do the two
+  gene lists agree (Jaccard overlap)? What does that tell you?
+
+### 5. Multi-view integration
+- Z-score both views (W2D4 rules), concatenate, PCA
+- CCA between the views: canonical correlation 1, and its correlation with
+  condition
+- One sentence: does the protein view *support* the RNA story?
+
+### 6. Classifier
+- Features: top 20 DE genes by p-value (from step 4)
+- Logistic regression, stratified 70/30 split, `random_state=2026`
+- Report test accuracy + confusion matrix — and one sentence on what the
+  accuracy does and does not prove (W3D2's evaluation rules)
+
+### 7. Conclusion + receipt
+- ≤ 8 sentences: what was found, at what FDR, what the batch check said,
+  what the classifier adds, what you would do next
+- Receipt: versions (`pd.show_versions()`), date, SHA-256 of the three
+  data files
+
+## The rubric (self-grade before you call it done)
+
+| Criterion | Points |
+|---|---|
+| QC flags reported with counts, not just applied | 15 |
+| Normalization correct (log **after** depth-scaling) | 10 |
+| EDA plots pass the Day 3 pre-flight | 10 |
+| DE: correct test, BH applied, volcano readable | 20 |
+| Batch check performed and interpreted honestly | 15 |
+| Integration: scaled concat + CCA, interpreted with the confounding law in mind | 10 |
+| Classifier: seeded, stratified, held-out | 10 |
+| Receipt complete; report renders clean | 10 |
+
+::: {.callout-warning}
+## The three ways capstones fail
+1. **Tuning toward the answer** — reading the generator, seeing the planted
+   40 genes, then "discovering" exactly 40. Discover first; audit after
+2. **Hiding the batch structure** — if PC1 is batch, say it's batch, then
+   handle it. A null-with-caveats report beats a clean-looking wrong one
+3. **Unreproducible polish** — beautiful plots, no seed, no versions. Every
+   number in the report must regenerate from `analysis.py`
+:::
+
+## A live taste of the data
+
+The full files live on disk (they're too big for browser cells), but here
+is the shape of the metadata and the first principles of the QC — live:
+
+```{pyodide}
+#| label: meta-preview
+import numpy as np
+import pandas as pd
+
+# the real files: data/capstone_meta.csv (180 rows) — structure preview:
+#   sample_id, condition, cell_type, batch
+meta_preview = pd.DataFrame({
+    "sample_id":  ["S001", "S002", "S003", "...", "S180"],
+    "condition":  ["control", "treated", "control", "...", "treated"],
+    "cell_type":  ["A", "B", "A", "...", "C"],
+    "batch":      ["B1", "B1", "B2", "...", "B2"]})
+print(meta_preview, "\n")
+print("In analysis.py you will:")
+print("  meta = pd.read_csv('data/capstone_meta.csv')")
+print("  print(meta.condition.value_counts())        # 90 / 90")
+print("  print(pd.crosstab(meta.batch, meta.group))  # <- the confounding check")
+```
+
+And the QC fence you'll implement, rehearsed on a small seeded stand-in —
+this is the actual code you'll move into `analysis.py`:
+
+```{pyodide}
+#| label: qc-rehearsal
+rng = np.random.default_rng(2026)
+totals = pd.Series(rng.lognormal(np.log(1e4), 0.5, 180), name="totals")
+
+q1, q3 = totals.quantile([0.25, 0.75])
+iqr = q3 - q1
+fence = (totals >= q1 - 1.5 * iqr) & (totals <= q3 + 1.5 * iqr)
+print("median total:", round(totals.median(), 0))
+print("fence:", (q1 - 1.5 * iqr).round(0), "to", (q3 + 1.5 * iqr).round(0))
+print("flagged:", (~fence).sum(), "of", len(totals))
+```
+
+On the real data the fence will catch the few deliberately-broken samples —
+finding them, saying which batch they're in, and excluding them with a
+written reason is QC points 1–2 on the rubric.
+
+## Reference solutions
+
+| File | What it is |
+|---|---|
+| `projects/p5/solution.py` | full pipeline, every rubric item, verified numbers |
+| `projects/p5/solution.R` | the DE + FDR section in R — must recover the same gene set |
+| `projects/p5/report-solution.qmd` | a complete rendered report to compare against |
+
+Attempt the full pipeline before opening them. The solutions exist to
+check your work, not to replace it — the rubric is the checklist.
+
+## Wrap-up checklist
+
+- [ ] I can run the full loop: QC → normalize → EDA → DE + FDR → integrate → classify → report
+- [ ] My report has a receipt (seed, versions, date, checksums)
+- [ ] I looked for batch structure BEFORE interpreting biology — and wrote what I found
+- [ ] The generator was read after analysis, not before
+- [ ] R and Python agree on the DE gene set (the P1 standard, one last time)
+- [ ] The report renders clean and reads like something you'd send a collaborator
+
+**Course complete.** You came in writing AI-generated R you couldn't read;
+you're leaving having built PCA, HMMs, and diffusion pseudotime from raw
+numpy, and a published analysis with a receipt. The patterns are yours now.

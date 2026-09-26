@@ -2,8 +2,8 @@
 title: "Day 1 — ML Foundations: Splits, CV, Pipelines"
 subtitle: "Week 4 · tidymodels workflows ↔ sklearn Pipelines, and the no-leakage rules"
 resources:
-  - data/p4/expr.csv
-  - data/p4/labels.csv
+  - ../data/p4/expr.csv
+  - ../data/p4/labels.csv
 ---
 
 ## Cheat sheet (90 seconds)

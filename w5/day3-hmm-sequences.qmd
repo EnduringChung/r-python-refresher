@@ -1,0 +1,655 @@
+---
+title: "Day 3 — HMMs + Sequence Prediction"
+subtitle: "Week 5 · forward, backward, Viterbi and Baum-Welch — all live — then k-mer classifiers"
+---
+
+## Cheat sheet (60 seconds)
+
+| Task | What it computes | Typical use |
+|---|---|---|
+| Viterbi | the single most likely hidden path | "where are the islands?" hard calls |
+| Forward | P(observations) — likelihood of the sequence | model comparison, training |
+| Forward–backward | P(state at i | all observations) | posterior decoding, soft calls |
+| Baum–Welch (EM) | re-estimate π, A, B from unlabeled sequence | unsupervised training |
+| Posterior decode | argmax per-position posterior | smoother than Viterbi at boundaries |
+| k-mer features | counts of length-k words per sequence | turn strings into matrices |
+| logistic regression | P(class | features) | promoter/pathogen classification |
+
+::: {.callout-note}
+## Modeling honesty before any code
+A true CpG-island HMM conditions on **dinucleotides** (the "CpG" in a
+CpG island is a *pair*). Today's live model uses single-nucleotide
+emissions — a **GC-rich island detector**, the standard teaching
+simplification. Every line generalizes: swap the 4×2 emission matrix for a
+16×2 dinucleotide one and you have the real thing.
+:::
+
+## The model, then the data it hides
+
+Two hidden states — **background (bg)** and **island** — with transition
+matrix `A` (rare switches: islands are long) and GC-rich island emissions:
+
+```{pyodide}
+#| label: hmm-model
+import numpy as np
+
+states = ["bg", "island"]
+bases = ["A", "C", "G", "T"]
+
+pi_true = np.array([0.8, 0.2])                  # start probabilities
+A_true = np.array([[0.99, 0.01],                # bg -> bg / bg -> island
+                   [0.02, 0.98]])               # island -> bg / island -> island
+B_true = np.array([[0.30, 0.20, 0.20, 0.30],    # bg emits ~uniform
+                   [0.10, 0.40, 0.40, 0.10]])   # island emits G/C-rich
+
+rng = np.random.default_rng(21)
+n = 3000
+
+hidden = np.empty(n, dtype=int)
+obs = np.empty(n, dtype=int)
+hidden[0] = rng.choice(2, p=pi_true)
+obs[0] = rng.choice(4, p=B_true[hidden[0]])
+for t in range(1, n):
+    hidden[t] = rng.choice(2, p=A_true[hidden[t - 1]])
+    obs[t] = rng.choice(4, p=B_true[hidden[t]])
+
+seq = "".join(bases[o] for o in obs)
+true_island = hidden == 1
+
+print(seq[:80], "...")
+print(f"true island fraction: {true_island.mean():.2f}")
+print(f"GC in islands: {np.mean([s in 'GC' for s, m in zip(seq, true_island) if m]):.2f}"
+      f" | GC in background: {np.mean([s in 'GC' for s, m in zip(seq, true_island) if not m]):.2f}")
+```
+
+Rare luxury: **we know the hidden path** — so we can grade every decoder.
+Real ChIP/CpG analyses never have this; synthetic truth is how you learn
+what decoders can and can't do.
+
+## Viterbi: the best single path (log space, numpy)
+
+Dynamic programming: keep, for each state, the log-probability of the best
+path ending there. The array `bp` remembers which predecessor won — the
+backtrace is the path:
+
+```{pyodide}
+#| label: viterbi
+def viterbi(obs, pi, A, B):
+    n, m = len(obs), len(pi)
+    V = np.full((n, m), -np.inf)
+    bp = np.zeros((n, m), dtype=int)
+    V[0] = np.log(pi) + np.log(B[:, obs[0]])
+    for t in range(1, n):
+        for j in range(m):
+            cand = V[t - 1] + np.log(A[:, j])
+            bp[t, j] = np.argmax(cand)
+            V[t, j] = cand[bp[t, j]] + np.log(B[j, obs[t]])
+    path = np.empty(n, dtype=int)
+    path[-1] = np.argmax(V[-1])
+    for t in range(n - 2, -1, -1):
+        path[t] = bp[t + 1, path[t + 1]]
+    return path, V[-1].max()
+
+vit_path, vit_ll = viterbi(obs, pi_true, A_true, B_true)
+acc = (vit_path == hidden).mean()
+print(f"Viterbi log-likelihood: {vit_ll:.1f}")
+print(f"Viterbi per-position accuracy vs truth: {acc:.3f}")
+```
+
+~90%+ accuracy from 16 numbers and a loop. The errors are *boundary*
+errors — Viterbi must commit to one state per position, so island edges
+flicker. That's not a bug; it's what "single best path" means.
+## Forward–backward: the posterior view
+
+The forward algorithm accumulates the probability of *everything seen so
+far*; scaling factors keep 3000 products from underflowing to 0. Paired
+with the (backward) pass it yields P(state at t | all observations):
+
+```{pyodide}
+#| label: forward-backward
+def forward_backward(obs, pi, A, B):
+    n, m = len(obs), len(pi)
+    F = np.zeros((n, m)); Sc = np.zeros(n)          # scaled forward
+    F[0] = pi * B[:, obs[0]]; Sc[0] = F[0].sum(); F[0] /= Sc[0]
+    for t in range(1, n):
+        F[t] = (F[t - 1] @ A) * B[:, obs[t]]
+        Sc[t] = F[t].sum(); F[t] /= Sc[t]
+    R = np.zeros((n, m)); R[-1] = 1.0
+    for t in range(n - 2, -1, -1):
+        R[t] = (A @ (B[:, obs[t + 1]] * R[t + 1])) / Sc[t + 1]
+    return F, R, Sc, np.sum(np.log(Sc))
+
+F, R, Sc, loglik = forward_backward(obs, pi_true, A_true, B_true)
+posterior = F * R
+posterior /= posterior.sum(1, keepdims=True)
+
+post_path = posterior[:, 1] > 0.5
+print(f"log-likelihood via scaling: {loglik:.1f} (Viterbi was a LOWER bound)")
+print(f"posterior-decode accuracy: {(post_path == hidden).mean():.3f}")
+boundary = np.zeros(len(hidden), dtype=bool)     # true island edges
+boundary[1:] = np.diff(true_island.astype(int)) == 1
+print(f"accuracy AWAY from island boundaries: "
+      f"{(post_path[~boundary] == hidden[~boundary]).mean():.3f}")
+```
+
+::: {.callout-important}
+## Viterbi vs posterior — know which one you're quoting
+Viterbi answers "best single story"; posterior answers "how confident is
+the model at THIS position, given everything". They disagree exactly where
+the model is torn — transition boundaries. Peak-aware analyses (ChIP
+peaks, CpG islands) usually want the posterior; a published genome track
+of *hard* calls wants Viterbi.
+:::
+
+## Baum–Welch: learning the model without labels
+
+EM in miniature: (E-step) forward–backward gives expected state visits and
+transitions; (M-step) re-estimate π, A, B from those expectations. Each
+iteration can only increase the likelihood — watch it climb:
+
+```{pyodide}
+#| label: baum-welch
+def baum_welch(obs, pi, A, B, iters=25):
+    n, m = len(obs), len(pi)
+    for it in range(iters):
+        F, R, Sc, ll = forward_backward(obs, pi, A, B)
+        if it % 5 == 0 or it == iters - 1:
+            print(f"iter {it:2d}: log-likelihood = {ll:.1f}")
+        gamma = F * R; gamma /= gamma.sum(1, keepdims=True)
+        # expected transitions (each time slice normalized by its scale)
+        xi = np.zeros((m, m))
+        for t in range(n - 1):
+            xi += (F[t][:, None] * A
+                   * (B[:, obs[t + 1]] * R[t + 1])[None, :]) / Sc[t + 1]
+        # M-step
+        pi = gamma[0]
+        A = xi / xi.sum(1, keepdims=True)
+        for j in range(m):
+            w = gamma[:, j]
+            B[j] = (w[:, None] * np.eye(4)[obs]).sum(0) / w.sum()
+    return pi, A, B, ll
+
+pi0 = np.array([0.5, 0.5])                        # deliberately wrong start
+A0 = np.array([[0.9, 0.1], [0.1, 0.9]])
+# a WEAK GC hint, not uniform: from a perfectly uniform B0 both states are
+# interchangeable, EM never breaks the symmetry, and nothing is learned
+# (we verified this failure live while writing this lesson!)
+B0 = np.array([[0.26, 0.24, 0.24, 0.26],
+               [0.22, 0.28, 0.28, 0.22]])
+pi_hat, A_hat, B_hat, _ = baum_welch(obs, pi0, A0, B0)
+
+print("\ntrue A:\n", A_true.round(3), "\nlearned A:\n", A_hat.round(3))
+print("true island GC:", B_true[1].round(2), "\nlearned:\n", B_hat.round(2))
+```
+
+The likelihood climbs monotonically (EM's guarantee) and the learned
+parameters land essentially on the truth — from a wrong transition matrix
+and a vague prior, with zero labels. (EM can also lock onto a worse optimum
+with unlucky starts; real pipelines try several restarts and keep the best
+likelihood.)
+
+## From sequences to predictions: k-mer classifiers
+
+HMMs model one sequence's internal structure. For *classify this sequence*
+questions — promoter vs not, pathogen vs host — the workhorse is cruder
+and brutally effective: count k-mers, feed counts to a classifier.
+
+```{pyodide}
+#| label: kmer-classifier
+def kmer_features(seqs, k=4):
+    names = ["".join(p) for p in
+             np.array(np.meshgrid(*[bases] * k)).T.reshape(-1, k)]
+    idx = {name: i for i, name in enumerate(names)}
+    X = np.zeros((len(seqs), len(idx)))
+    for s_i, s in enumerate(seqs):
+        for i in range(len(s) - k + 1):
+            key = s[i:i + k]
+            if key in idx:
+                X[s_i, idx[key]] += 1
+    return X / (np.array([len(s) for s in seqs])[:, None] - k + 1), names
+
+rng2 = np.random.default_rng(5)
+motif = "TATAAT"
+seqs, labels = [], []
+for lab in [0, 1]:
+    for _ in range(200):
+        s = list("".join(rng2.choice(list(bases), 150)))
+        if lab == 1:                                    # promoter-ish:
+            for pos in rng2.choice(140, 3, replace=False):
+                s[pos:pos + 6] = list(motif)            # plant TATAAT
+                s[pos + 8] = "G"                        # + GC enrichment touch
+        seqs.append("".join(s)); labels.append(lab)
+
+Xk, kmer_names = kmer_features(seqs, k=4)
+yk = np.array(labels)
+
+from sklearn.linear_model import LogisticRegression
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import confusion_matrix
+
+Xtr, Xte, ytr, yte = train_test_split(Xk, yk, test_size=0.3,
+                                      stratify=yk, random_state=42)
+clf = LogisticRegression(max_iter=2000).fit(Xtr, ytr)
+pred = clf.predict(Xte)
+print("test accuracy:", round(clf.score(Xte, yte), 3))
+print("confusion matrix:\n", confusion_matrix(yte, pred))
+top = np.argsort(np.abs(clf.coef_[0]))[-3:]
+print("strongest k-mer drivers:", [kmer_names[i] for i in top])
+```
+
+~0.95+ accuracy from pure word counts, no alignment, no model of biology —
+which is exactly its power and its danger: it learned "contains TATAAT-ish
+words", and sequences without that motif family will not transfer.
+
+::: {.callout-tip}
+## 🖥️ Run for real
+Everything today is already real — T1 live, no external packages beyond
+numpy/sklearn. For genomics-scale HMM work, look at `pomegranate`
+(local install) and for k-mer pipelines at `screed`/`khmer`. The Week 4
+sequence lessons (`scripts/rnaseq/` is bulk RNA; FASTA/FASTQ tooling) pair
+naturally with today's featurizer.
+:::
+
+## The R twin: identical Viterbi, identical numbers
+
+Parity on a small literal input — same sequence, same model, same decoded
+path and log-likelihood in both dialects:
+
+```{webr}
+#| label: viterbi-r
+obs_s <- strsplit("ACGTTCGAAT", "")[[1]]
+bases <- c("A", "C", "G", "T")
+obs_v <- match(obs_s, bases) - 1L
+pi <- c(0.6, 0.4)
+A <- matrix(c(0.85, 0.15, 0.25, 0.75), nrow = 2, byrow = TRUE)
+B <- matrix(c(0.3, 0.25, 0.25, 0.2,
+              0.1, 0.4, 0.4, 0.1), nrow = 2, byrow = TRUE)
+
+viterbi_r <- function(obs, pi, A, B) {
+  n <- length(obs); m <- length(pi)
+  V <- matrix(-Inf, n, m); bp <- matrix(0L, n, m)
+  V[1, ] <- log(pi) + log(B[, obs[1] + 1])
+  for (t in 2:n) for (j in 1:m) {
+    cand <- V[t - 1, ] + log(A[, j])
+    bp[t, j] <- which.max(cand)
+    V[t, j] <- cand[bp[t, j]] + log(B[j, obs[t] + 1])
+  }
+  path <- integer(n); path[n] <- which.max(V[n, ])
+  for (t in (n - 1):1) path[t] <- bp[t + 1, path[t + 1]]
+  list(path = path - 1L, ll = V[n, path[n]])
+}
+
+res <- viterbi_r(obs_v, pi, A, B)
+paste(res$path, collapse = "")    # decoded states (0 = bg, 1 = island)
+round(res$ll, 4)                  # log-likelihood of that path
+```
+
+```{pyodide}
+#| label: viterbi-py-twin
+import numpy as np
+
+obs = np.array([0, 1, 2, 3, 3, 1, 2, 0, 0, 3])   # "ACGTTCGAAT"
+pi = np.array([0.6, 0.4])
+A = np.array([[0.85, 0.15], [0.25, 0.75]])
+B = np.array([[0.30, 0.25, 0.25, 0.20],
+              [0.10, 0.40, 0.40, 0.10]])
+
+def viterbi(obs, pi, A, B):
+    n, m = len(obs), len(pi)
+    V = np.full((n, m), -np.inf); bp = np.zeros((n, m), dtype=int)
+    V[0] = np.log(pi) + np.log(B[:, obs[0]])
+    for t in range(1, n):
+        for j in range(m):
+            cand = V[t - 1] + np.log(A[:, j])
+            bp[t, j] = np.argmax(cand)
+            V[t, j] = cand[bp[t, j]] + np.log(B[j, obs[t]])
+    path = np.empty(n, dtype=int); path[-1] = np.argmax(V[-1])
+    for t in range(n - 2, -1, -1):
+        path[t] = bp[t + 1, path[t + 1]]
+    return path, V[-1].max()
+
+path, ll = viterbi(obs, pi, A, B)
+print("".join(map(str, path)))
+print(round(ll, 4))
+```
+
+Same path string, same log-likelihood to 4 decimals — the parity thread
+on an algorithm most people only ever meet inside a package.
+
+## Drills (live pad)
+
+```{pyodide}
+#| label: drills
+import numpy as np
+A = np.array([[0.9, 0.1], [0.2, 0.8]])
+
+# 1. A.sum(axis=1) — rows or columns sum to 1, and why rows?
+
+# 2. log(0) = -inf: which model entry would produce it, and why is
+#    log-space Viterbi OK with that but the scaled forward NOT?
+
+# 3. Probability of staying in state 0 for exactly 5 steps, then leaving:
+#    0.9^4 * 0.1 — run it.
+
+# 4. Expected island length with A[1,0] = 0.04? (1/0.04)
+
+# 5. Expected island length with A[1,0] = 0.04 but emiss... no — with
+#    self-loop 0.96? (1/(1-0.96))
+
+# 6. pi @ A — after ONE step from start probs [0.8, 0.2], where are you?
+#    Two steps? Is it converging toward something? (run 4-5 powers)
+
+# 7. Stationary distribution of A (hint: it satisfies pi @ A = pi, and for
+#    a 2-state chain pi[1] = A[0,1] / (A[0,1] + A[1,0]))
+
+# 8. Viterbi gave path 0,0,1,1 and posterior at position 2 is 0.51.
+#    What does each say about state 2, and do they disagree?
+
+# 9. B row sums must be 1. A learned B row [0.2, 0.3, 0.3, 0.1] — what
+#    happened and which EM step is supposed to prevent it?
+
+# 10. 4-mers on DNA: how many features? 8-mers? When does that explode
+#     past your number of sequences?
+```
+
+::: {.callout-tip collapse="true"}
+## Expected answers
+1. Rows — A[i, j] = P(next = j | now = i); conditioning sums out
+2. An impossible transition (A[i,j] = 0) → log = −inf, the path just never
+   uses it. The scaled forward MULTIPLIES by it → NaN — hence real
+   implementations floor probabilities at ~1e-10
+3. 0.06561 — geometric-sojourn times are how HMMs encode "islands are long"
+4. 25 positions — mean sojourn = 1/(exit prob)
+5. 25 — same number (0.96 self-loop = 0.04 exit); read matrices carefully!
+6. [0.76, 0.24] → [0.732, 0.268] → ... → converges to the stationary
+   distribution — mixing again (Day 2's walk, 2-state edition)
+7. pi[1] = 0.1/(0.1+0.2) = 1/3 → pi = [2/3, 1/3]
+8. Viterbi says state 0 (best single path); posterior says 51:49 island —
+   a coin flip. Both are honest; they answer different questions
+9. Rows must sum to 1 and this sums to 0.9 — a normalization bug in the
+   M-step (divide by gamma-sum). EM's M-step enforces valid distributions
+10. 256 and 65,536 — with ~hundreds of sequences, 8-mers are mostly zeros
+    (sparse, overfit-prone). k grows feature space by 4× per letter
+:::
+
+## Exercises
+
+### Exercise 1 — dinucleotide reality check
+
+Compute the CpG (CG-dinucleotide) count per kb inside vs outside true
+islands. If islands were truly CpG-rich (not just GC-rich), inside should
+beat outside clearly. Python:
+
+```{pyodide}
+#| exercise: ex-d3-cpg
+# reuse seq, true_island from the model cell
+cpg_in = cpg_out = kb_in = kb_out = 0
+for i in range(len(seq) - 1):
+    ______
+print(f"CpG/kb inside islands:  {cpg_in / (kb_in / 1000):.1f}")
+print(f"CpG/kb outside islands: {cpg_out / (kb_out / 1000):.1f}")
+```
+
+::: {.hint exercise="ex-d3-cpg"}
+Count `seq[i:i+2] == "CG"` split by `true_island[i]`; kilobases =
+positions/1000 per class.
+:::
+
+::: {.solution exercise="ex-d3-cpg"}
+```python
+for i in range(len(seq) - 1):
+    is_cpg = seq[i:i + 2] == "CG"
+    if true_island[i]:
+        cpg_in += is_cpg; kb_in += 1
+    else:
+        cpg_out += is_cpg; kb_out += 1
+# Inside ≈ 164 CpG/kb, outside ≈ 39 — a 4× jump from GC content alone.
+# Now the punchline: compare inside-islands CpG to what plain GC content
+# predicts for INDEPENDENT bases, (GC/2)² × 1000 = (0.8/2)² × 1000 ≈ 160.
+# Observed/expected ≈ 1.0 — no CpG EXCESS whatsoever. Real CpG islands
+# are defined by observed/expected ≫ 1 (dinucleotide correlation), which
+# an iid single-nucleotide HMM cannot express. Dinucleotide emissions are
+# not a detail — they are the actual biology.
+```
+:::
+
+### Exercise 2 — posterior band plot
+
+Plot the island posterior (position on x) with the true path underneath,
+for the first 500 positions. Then count disagreements ABOVE 0.9
+confidence. Python:
+
+```{pyodide}
+#| exercise: ex-d3-postband
+import matplotlib.pyplot as plt
+# reuse posterior, hidden
+fig, ax = plt.subplots(figsize=(10, 2.5))
+______
+conf_wrong = ((posterior[:, 1] > 0.9) != hidden).sum()
+print("confident-but-wrong positions:", conf_wrong, "of", len(hidden))
+plt.show()
+```
+
+::: {.hint exercise="ex-d3-postband"}
+`ax.plot(posterior[:500, 1])` plus `ax.fill_between` or a step line for
+`hidden[:500]`; label axes.
+:::
+
+::: {.solution exercise="ex-d3-postband"}
+```python
+fig, ax = plt.subplots(figsize=(10, 2.5))
+ax.plot(posterior[:500, 1], lw=1, label="P(island | seq)")
+ax.fill_between(range(500), hidden[:500], step="mid", alpha=0.2,
+                label="truth")
+ax.set(xlabel="position", ylabel="posterior", ylim=(-0.05, 1.05))
+ax.legend()
+plt.show()
+# confident-but-wrong ≈ 9% overall — and 2.8× enriched within ±15 bp of
+# island edges (56% of errors there, which is 20% of positions). A
+# posterior track with a confidence band is the honest genome-file output.
+```
+:::
+
+### Exercise 3 — the EM monotonicity check (R)
+
+Baum-Welch guarantees non-decreasing likelihood. Implement the R Viterbi's
+model + a likelihood via forward *without* scaling in R (n is small here —
+20 observations), run 3 EM iterations, and confirm ll never drops.
+
+```{webr}
+#| exercise: ex-d3-em-r
+obs_v <- c(0, 2, 2, 3, 1, 2, 2, 2, 3, 0, 2, 2, 1, 2, 2, 3, 2, 2, 0, 2)
+pi0 <- c(0.5, 0.5)
+A0 <- matrix(c(0.8, 0.2, 0.3, 0.7), 2, byrow = TRUE)
+B0 <- matrix(c(0.25, 0.25, 0.25, 0.25,
+               0.25, 0.25, 0.25, 0.25), 2, byrow = TRUE)
+
+forward_ll <- function(obs, pi, A, B) {
+  F <- pi * B[, obs[1] + 1]
+  for (t in 2:length(obs)) F <- (F %*% A) * B[, obs[t] + 1]
+  log(sum(F))
+}
+
+# EM update = re-estimate A from expected transitions. For this exercise:
+# run 3 iterations of YOUR choice of a valid update and print the three
+# log-likelihoods — the shape matters more than the exact numbers.
+______
+```
+
+::: {.hint exercise="ex-d3-em-r"}
+Even a soft-count update works: `A_new[i,j] ∝ (# times in i) * A[i,j]`
+is NOT real EM — do the honest E-step:
+ξ_ij(t) ∝ F[t,i] · A[i,j] · B[j,obs[t+1]] · R[t+1,j] with unscaled F/R.
+Or: acceptable simplification — re-estimate only B from Viterbi counts and
+report ll; it usually climbs. Say what you did.
+:::
+
+::: {.solution exercise="ex-d3-em-r"}
+```r
+# honest EM for this toy (unscaled — n = 20, no underflow):
+em_step <- function(obs, pi, A, B) {
+  n <- length(obs)
+  F <- matrix(0, n, 2); F[1, ] <- pi * B[, obs[1] + 1]
+  for (t in 2:n) F[t, ] <- (F[t-1, ] %*% A) * B[, obs[t] + 1]
+  R <- matrix(0, n, 2); R[n, ] <- 1
+  for (t in (n-1):1) R[t, ] <- (A %*% (B[, obs[t+1] + 1] * R[t+1, ]))
+  ll <- log(sum(F[n, ])); F <- F / sum(F[n, ]); R <- R / sum(R[n, ])
+  g <- F * R; g <- g / rowSums(g)
+  Anew <- matrix(0, 2, 2)
+  for (t in 1:(n-1)) Anew <- Anew + (F[t, ] %o% F[t + 1, ]) * A *
+    (B[, obs[t+1] + 1] * R[t + 1, ])
+  Anew <- Anew / rowSums(Anew)
+  Bnew <- t(g) %*% (diag(4)[obs + 1, ]) / colSums(g)
+  list(pi = g[1, ], A = Anew, B = Bnew, ll = ll)
+}
+p <- pi0; A <- A0; B <- B0
+for (it in 1:3) {
+  r <- em_step(obs_v, p, A, B)
+  cat("iter", it, "ll:", round(forward_ll(obs_v, r$pi, r$A, r$B), 4), "\n")
+  p <- r$pi; A <- r$A; B <- r$B
+}
+# ll climbs: ≈ -22.10 -> -22.05 -> -21.85 — monotone by construction; if
+# you ever see a drop, you have a bug in the E-step normalization.
+```
+:::
+
+### Exercise 4 — k-mer length sweep
+
+Redo the classifier with k = 2, 4, 6 and report test accuracy for each.
+(Featurizer already handles any k.) Python:
+
+```{pyodide}
+#| exercise: ex-d4-ksweep
+for k in [2, 4, 6]:
+    ______
+```
+
+::: {.hint exercise="ex-d4-ksweep"}
+Re-`kmer_features(seqs, k)`, same split (`random_state=42`), same
+`LogisticRegression(max_iter=2000)`, print `k` and `score`.
+:::
+
+::: {.solution exercise="ex-d4-ksweep"}
+```python
+for k in [2, 4, 6]:
+    Xk = kmer_features(seqs, k=k)
+    Xtr, Xte, ytr, yte = train_test_split(Xk, yk, test_size=0.3,
+                                          stratify=yk, random_state=42)
+    acc = LogisticRegression(max_iter=2000).fit(Xtr, ytr).score(Xte, yte)
+    print(f"k={k}: {len(Xk[0])} features, accuracy {acc:.3f}")
+# k=2 ≈ 0.81 (16 features can say "GC-rich" but can't see TATAAT) ·
+# k=4 ≈ 0.97 (motif fragments appear) · k=6 ≈ 0.99 (the signal IS a
+# 6-mer — with 4096 features on 280 rows it still wins here because the
+# synthetic signal is exactly 6 letters long; real data won't be this
+# kind). Feature size vs sample size is THE k-mer design decision.
+```
+:::
+
+### Exercise 5 — the cross-validation confession (refactor drill)
+
+This AI-generated evaluation has three sins. Name them, then fix:
+
+```{pyodide}
+#| exercise: ex-d5-refactor
+# ❌ AI-smell:
+from sklearn.linear_model import LogisticRegression
+clf = LogisticRegression().fit(Xk, yk)          # fit on EVERYTHING
+print("accuracy:", clf.score(Xk, yk))           # ...scored on the same
+# and the features were never scaled or checked for sparsity
+```
+
+::: {.hint exercise="ex-d5-refactor"}
+1. Train == test set (the accuracy is a memory test, not skill);
+2. no seed/stratification anywhere — unreproducible AND fragile on
+   balanced classes;
+3. `max_iter` left at default 100 — with unscaled high-dim k-mer counts
+   LogisticRegression may not converge (check the warning!).
+:::
+
+::: {.solution exercise="ex-d5-refactor"}
+```python
+from sklearn.model_selection import train_test_split
+Xtr, Xte, ytr, yte = train_test_split(Xk, yk, test_size=0.3,
+                                      stratify=yk, random_state=42)
+clf = LogisticRegression(max_iter=2000).fit(Xtr, ytr)
+print("test accuracy:", round(clf.score(Xte, yte), 3))
+# Seeded, stratified, held-out, converged. The Week 2/3 reproducibility
+# rules survive into genomics untouched — that's the point of threads.
+```
+:::
+
+## Common pitfalls (real ones)
+
+::: {.callout-warning}
+## 1. Underflow without scaling
+3000-position forward products underflow any float — silently. If your
+forward likelihood prints 0.0 or NaN, you forgot the per-step
+normalization (the `Sc` factors). Keep the scaling constants; they ARE the
+log-likelihood.
+:::
+
+::: {.callout-warning}
+## 2. EM to a worse optimum — or no optimum at all
+Baum-Welch climbs to *a* local optimum, not the truth. Worse: start it with
+perfectly uniform emissions and the two states are statistically
+interchangeable — symmetry never breaks, likelihood flatlines, you learn
+nothing (we watched it happen live while verifying this lesson). Use a weak
+biological prior (GC-rich hint) or multiple random restarts, keep the best
+likelihood, then sanity-check learned emissions against biology.
+:::
+
+::: {.callout-warning}
+## 3. k-mer classifiers leak by construction
+If you split train/test AFTER motif placement using a shared rng state — or
+worse, the same underlying gene contributes sequences to both sides —
+accuracy inflates. Split by *source*, not by row, whenever sequences share
+origin (chromosome, genome, batch).
+:::
+
+## Self-quiz — predict the output
+
+```{pyodide}
+#| label: quiz
+# model from the day: A_true, B_true, pi_true
+
+# Q1: A_true.sum(axis=1) — what do you get, twice?
+
+# Q2: np.log(B_true[:, 0]) — four finite numbers. Now imagine B[0,0] = 0:
+#     which decoder breaks first, Viterbi or scaled forward?
+
+# Q3: If A[0,1] = A[1,0] = 0.5 (rapid switching), what happens to average
+#     island length, and to Viterbi's boundary flicker?
+
+# Q4: posterior at position t is [0.5, 0.5]. What is the model TELLING
+#     you, honestly?
+
+# Q5: You double the island self-loop A[1,1] from 0.96 to 0.98 and
+#     renormalize: expected island length — 25 to what?
+```
+
+::: {.callout-tip collapse="true"}
+## Quiz answers
+1. [1, 1] both times — rows are conditioning distributions
+2. Scaled forward — multiplication by 0 → NaN; Viterbi in log-space just
+   avoids the path (−inf is informative, NaN is not)
+3. Expected island length 1/(0.5) = 2 — flicker explodes; Viterbi output
+   becomes confetti. Long-range structure NEEDS high self-loops
+4. "I genuinely cannot tell" — 0.5/0.5 is maximal uncertainty, not a
+   hidden answer. Report it as unassigned, don't round it
+5. 1/(1−0.98) = 50 — doubling persistence DOUBLES mean length; small
+   transition edits, big biological claims (check EM's learned A!)
+:::
+
+## Wrap-up checklist
+
+- [ ] I can write Viterbi and forward–backward from memory (I just did)
+- [ ] Log-space for Viterbi, scaling for forward — and why each
+- [ ] Baum-Welch = EM: E-step expectations, M-step valid distributions,
+      likelihood only climbs
+- [ ] Single-nucleotide model = GC-detector; real CpG islands need
+      dinucleotide emissions (Exercise 1 measured the gap)
+- [ ] k-mer features + seeded, stratified, held-out classifier
+- [ ] I know which decoder my question needs: best path vs posterior
+
+**Tomorrow:** two omics views of the same biology — CCA, concatenation,
+and the batch effects that fool all of it.

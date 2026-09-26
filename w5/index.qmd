@@ -1,0 +1,60 @@
+---
+title: "Week 5 — Bioinformatics II + Multi-omics Capstone"
+subtitle: "Single-cell, trajectories, HMMs, integration — and an end-to-end mini-study"
+---
+
+## The week at a glance
+
+| Day | Lesson | Superpower gained |
+|---|---|---|
+| 1 | [Single-cell Core](day1-singlecell.qmd) | the scanpy pipeline, demystified — you build it in numpy first |
+| 2 | [Trajectory & Pseudotime](day2-pseudotime.qmd) | diffusion pseudotime from scratch + honest interpretation |
+| 3 | [HMMs + Sequence Prediction](day3-hmm-sequences.qmd) | forward/backward/Viterbi/Baum-Welch live + k-mer classifiers |
+| 4 | [Multi-omics Integration](day4-multiomics.qmd) | CCA, concatenation, batch effects — live; MOFA/DIABLO concepts |
+| 5 | [Capstone](day5-capstone.qmd) | the full mini-study: QC → DE → classifier → published report |
+
+## How this week runs (tiers)
+
+Week 5 is the course's heaviest bioinformatics. Per the platform plan, lessons
+run at different **execution tiers**:
+
+- **T1 — Live** (Days 3–4 core, most of Day 1–2): every cell runs in this page
+  via webR/Pyodide. We implement the *algorithms* (PCA, clustering, Viterbi,
+  CCA) from scratch in numpy — small data, full transparency.
+- **T3 — Colab/local** (the real-package steps): scanpy, Seurat, MOFA can't
+  run in a browser. Look for the **🖥️ Run for real** boxes on each day: they
+  tell you exactly how to run the production version — a free
+  [Google Colab](https://colab.research.google.com/) notebook or the checked-in
+  script under `scripts/`.
+
+The rhythm is unchanged: cheat sheet → lesson → drills → exercises → pitfalls
+→ self-quiz → checklist. The capstone (Day 5) replaces drills with a brief,
+a rubric, and starter files.
+
+## The rhythm of every day (~1–2 hrs)
+
+1. **Cheat sheet** — 60–90 seconds of scanning, top of each lesson
+2. **Lesson** — prose + live examples (algorithm-first, package-second)
+3. **Drills** — predict out loud, then run
+4. **Exercises** — 5–6 graded, each with hint + solution (attempt first!)
+5. **Common pitfalls** — real bugs from the verification runs
+6. **Self-quiz** — 5 predict-the-output questions
+
+## Ground rules for the week
+
+1. **Algorithm before package**: build it in numpy to know what the package
+   actually does — then the scanpy/Seurat docs read like a menu, not magic
+2. **Every simulated dataset is seeded** — the W2 reproducibility habit,
+   non-negotiable in HMM and classifier work
+3. **Interpretation honesty**: pseudotime is not time, clusters are not cell
+   types, batch effects are not biology — each day drills one of these
+4. The capstone ships with a **receipt**: seed, versions, date, checksum
+   (the W2D5 hand-off ritual, now at full strength)
+
+## What "capstone" means here
+
+Day 5 is a real mini-study on a checked-in synthetic dataset with planted
+biology: QC the samples, find DE genes (with FDR), train a classifier on
+them, integrate the second omics view, and publish the analysis as a Quarto
+report — with starter files, a rubric, and reference solutions that produce
+identical numbers in both languages.

@@ -2,8 +2,8 @@
 title: "Day 2 — Classifiers & Evaluation"
 subtitle: "Week 4 · logistic vs forest vs boosting, and the metrics that matter"
 resources:
-  - data/p4/expr.csv
-  - data/p4/labels.csv
+  - ../data/p4/expr.csv
+  - ../data/p4/labels.csv
 ---
 
 ## Cheat sheet (90 seconds)

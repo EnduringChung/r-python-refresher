@@ -1,0 +1,525 @@
+---
+title: "Day 2 — Trajectory & Pseudotime"
+subtitle: "Week 5 · diffusion pseudotime from scratch, PAGA, and how not to over-interpret a tree"
+---
+
+## Cheat sheet (60 seconds)
+
+| Concept | scanpy (Python) | R world | One-line meaning |
+|---|---|---|---|
+| pseudotime | `sc.tl.dpt` | `monocle3`, `slingshot` | position along a differentiation *path*, not clock time |
+| diffusion map | `sc.tl.diffmap` | `destiny` | eigen-decomposition of a random-walk operator on the kNN graph |
+| DPT | `sc.tl.dpt(n_branchings=...)` | — | diffusion *distance* from a chosen root cell |
+| partition graph | `sc.tl.paga` | — | connectivity between clusters — the tree's backbone |
+| principal curve | — | `slingshot` | a smooth curve fitted through the cells, one branch at a time |
+| root cell | `adata.uns['iroot']` | `root_pr_nodes` | your *biological* claim — the pipeline can't choose it for you |
+
+::: {.callout-note}
+## Tier warning
+Real packages run Colab/local (see the 🖥️ box at the end). Today's live cells
+build the core algorithm — a **diffusion random walk over the kNN graph** —
+in raw numpy on a seeded, genuinely branched trajectory.
+:::
+
+## The seeded branching trajectory
+
+One latent process `ps ∈ [0, 1]` drives every cell. At `ps = 0.5` the lineage
+**branches**: late cells commit to branch A or B, and branch-specific genes
+switch on. If the algorithm works, its pseudotime should track `ps` — and its
+diffusion space should *show* the fork:
+
+```{pyodide}
+#| label: make-lineage
+import numpy as np
+import pandas as pd
+
+rng = np.random.default_rng(9)
+n = 300
+
+ps = rng.beta(1.2, 1.2, n)                       # latent pseudotime, truth
+branch = np.where(ps < 0.5, "trunk",
+                  rng.choice(["A", "B"], n))     # fate after the fork
+
+prog = 2.0 * ps[:, None] + rng.normal(0, 0.4, (n, 60))      # ramp with ps
+onA = ((branch == "A") & (ps > 0.5))[:, None]    # fate-A cells, as a column
+onB = ((branch == "B") & (ps > 0.5))[:, None]    # fate-B cells, as a column
+brA = 3.0 * onA + rng.normal(0, .4, (n, 40))     # branch-A genes switch on
+brB = 3.0 * onB + rng.normal(0, .4, (n, 40))     # branch-B genes switch on
+hk = rng.normal(0, 0.6, (n, 200))                # housekeeping noise
+
+E = np.hstack([prog, brA, brB, hk])
+counts = rng.poisson(10 * np.exp(E / 2)).astype(float)
+gene_names = ([f"PROG{i}" for i in range(60)]
+              + [f"BRA{i}" for i in range(40)]
+              + [f"BRB{i}" for i in range(40)]
+              + [f"HK{i}" for i in range(200)])
+
+print(pd.DataFrame({"ps": ps.round(2), "branch": branch}).value_counts()
+        .sort_index().head(8), "\n...")
+print("cells:", n, "| genes:", E.shape[1])
+```
+
+## From counts to diffusion space
+
+Same opening moves as Day 1 (normalize → log → HVG → PCA), then the new
+move: turn the kNN graph into a **random walk** and let it run. Cells deeply
+in branch A and cells in branch B stay *far apart* in walk-space even when
+Euclidean distance blurs them:
+
+```{pyodide}
+#| label: diffusion-space
+X = counts.astype(float)
+Xn = np.log1p(X / X.sum(1, keepdims=True) * np.median(X.sum(1)))
+hvg = np.argsort(Xn.var(0))[-60:]
+Xc = Xn[:, hvg] - Xn[:, hvg].mean(0)
+U, S, _ = np.linalg.svd(Xc, full_matrices=False)
+pcs = U[:, :6] * S[:6]
+
+# kNN graph -> Gaussian-kernel affinities -> row-stochastic walk matrix T
+d2 = ((pcs[:, None, :] - pcs[None, :, :]) ** 2).sum(-1)
+np.fill_diagonal(d2, np.inf)
+knn = np.argsort(d2, axis=1)[:, :15]
+sigma2 = np.median(d2[np.arange(n)[None].T, knn])   # local scale
+W = np.zeros((n, n))
+for i in range(n):
+    W[i, knn[i]] = np.exp(-d2[i, knn[i]] / sigma2)
+W = (W + W.T) / 2                                    # symmetrize
+T = W / W.sum(1, keepdims=True)                      # rows sum to 1
+
+P = np.linalg.matrix_power(T, 8)                     # the walk, 8 steps
+print("T rows sum to:", T.sum(1).min().round(3), "-", T.sum(1).max().round(3))
+print("diffused P shape:", P.shape, "- every entry is 'walk reachability'")
+```
+
+## Pseudotime: walk-distance from a root
+
+Pick a root — biologically, the least differentiated cell. Here: the cell
+with the *lowest* progressive-gene score (in real analyses: known markers,
+e.g. stem-cell genes). Pseudotime = each cell's diffusion distance from that
+root:
+
+```{pyodide}
+#| label: dpt
+# PROG genes are columns 0-60 of the full log-normalized matrix
+prog_score = Xn[:, :60].mean(1)
+root = int(np.argmin(prog_score))
+
+dpt = np.linalg.norm(P - P[root], axis=1)      # diffusion distance to root
+dpt_rank = (dpt - dpt.min()) / (dpt - dpt.max())   # scale to [0, 1]
+
+from scipy.stats import spearmanr
+rho_all = spearmanr(ps, dpt_rank).statistic
+print("root cell: true ps =", round(ps[root], 3), "(want: near 0)")
+print("Spearman(pseudotime, truth):", round(rho_all, 3),
+      "- strong, but NOT 1.0: count noise + a forked geometry both bend")
+print("the ordering away from perfect monotonicity. Expect ~0.7-0.8 here.")
+```
+
+```{pyodide}
+#| label: plot-diffusion
+import matplotlib.pyplot as plt
+
+# diffusion coordinates = top left singular vectors of the centered walk
+Pc = P - P.mean(0)
+Ud, Sd, _ = np.linalg.svd(Pc, full_matrices=False)
+dc = Ud[:, :3] * Sd[:3]
+
+fig, axes = plt.subplots(1, 2, figsize=(11, 4))
+sc = axes[0].scatter(dc[:, 1], dc[:, 2], c=ps, cmap="viridis", s=16)
+axes[0].set(title="Diffusion space — colored by TRUE ps",
+            xlabel="diffusion comp 2", ylabel="diffusion comp 3")
+plt.colorbar(sc, ax=axes[0])
+for b, c in [("A", "tab:red"), ("B", "tab:blue"), ("trunk", "tab:gray")]:
+    m = branch == b
+    axes[1].scatter(dpt_rank[m], dc[m, 2], c=c, s=16, label=b)
+axes[1].set(title="Pseudotime (x) separates the fork (y)",
+            xlabel="diffusion pseudotime", ylabel="diffusion comp 3")
+axes[1].legend()
+plt.tight_layout(); plt.show()
+```
+
+The left panel *is* the tree: trunk flows one way, then the fork. The right
+panel is the claim you can put in a paper: pseudotime orders the lineage,
+and diffusion component 3 (roughly) separates fates.
+
+::: {.callout-important}
+## The three honesty rules of trajectories
+1. **Pseudotime ≠ time.** It's transcriptomic similarity to a root — cells
+   that pause, cycle, or reverse don't play along
+2. **The root is YOUR claim.** Swap the root cell and the whole axis rotates.
+   Defend it with marker biology ("SOX2+ / least differentiated"), never
+   with the algorithm
+3. **Trees are one topology.** Cell cycles, continuous fate spectra, and
+   migration flows are not trees. PAGA's connectivity weights are the
+   tool for asking "is this branch even supported?" before you draw it
+:::
+
+## The R twin: same walk, other dialect
+
+slingshot fits principal curves; the diffusion move below is the `destiny`
+package's core idea — and the matrix algebra translates 1:1:
+
+```{webr}
+#| label: r-walk
+# same algorithm on R-generated draws (different stream, same conclusions)
+set.seed(9)
+n <- 300
+ps <- rbeta(n, 1.2, 1.2)
+branch <- ifelse(ps < 0.5, "trunk", sample(c("A", "B"), n, replace = TRUE))
+prog <- 2 * ps + rnorm(n * 60, 0, .4)
+brA <- 3 * (branch == "A" & ps > 0.5) + rnorm(n * 40, 0, .4)
+brB <- 3 * (branch == "B" & ps > 0.5) + rnorm(n * 40, 0, .4)
+hk <- rnorm(n * 200, 0, .6)
+E <- cbind(matrix(prog, n, 60), matrix(brA, n, 40),
+           matrix(brB, n, 40), matrix(hk, n, 200))
+counts <- rpois(n * 440, 10 * exp(E / 2))
+X <- matrix(counts, n, 440)
+
+Xn <- log1p(X / rowSums(X) * median(rowSums(X)))
+hvg <- order(apply(Xn, 2, var), decreasing = TRUE)[1:60]
+Xc <- scale(Xn[, hvg], center = TRUE, scale = FALSE)
+pc <- prcomp(Xc, rank. = 6)$x
+
+d2 <- as.matrix(dist(pc))^2; diag(d2) <- Inf
+knn <- t(apply(d2, 1, order))[, 1:15]
+sigma2 <- median(d2[cbind(rep(seq_len(n), 15), as.vector(knn))])
+W <- matrix(0, n, n)
+for (i in seq_len(n)) W[i, knn[i, ]] <- exp(-d2[i, knn[i, ]] / sigma2)
+W <- (W + t(W)) / 2
+Tw <- W / rowSums(W)                     # Tw, not T — T means TRUE in R!
+P8 <- Tw %*% Tw %*% Tw %*% Tw %*% Tw %*% Tw %*% Tw %*% Tw   # walk, 8 steps
+
+root <- which.min(rowMeans(Xn[, 1:60]))
+dpt <- sqrt(rowSums((P8 - P8[root, ])^2))
+cor(ps, dpt, method = "spearman") |> round(3)     # want: ~0.7, strongly +
+```
+
+Different random draws, same claim: the walk orders the lineage. (And note
+R's `%%` is *modulo* — matrix power is repeated `%*%`, a classic switching
+stumble.)
+
+::: {.callout-tip}
+## 🖥️ Run for real (Colab or your machine)
+`scripts/singlecell/trajectory_scanpy.py` — the same experiment with
+production machinery: `sc.tl.pca` → `sc.pp.neighbors` → `sc.tl.diffmap` →
+`sc.tl.dpt` → `sc.tl.paga` → `sc.pl.paga`. In Colab:
+`%pip install scanpy leidenalg` then paste. The R mirror —
+`slingshot` on a `SingleCellExperiment` — is annotated line-by-line in the
+same folder (`trajectory_slingshot.R`), for the local RStudio route.
+:::
+
+## Drills (live pad)
+
+```{pyodide}
+#| label: drills
+import numpy as np
+rng = np.random.default_rng(3)
+T = np.array([[0.0, 1.0, 0.0],
+              [0.5, 0.0, 0.5],
+              [0.0, 1.0, 0.0]])     # walk: middle is the hub
+
+# 1. T.sum(axis=1) — is T row-stochastic?
+
+# 2. np.linalg.matrix_power(T, 2)[0] — where is a walk from cell 0 after
+#    2 steps? And after 3 (matrix_power(T, 3)[0])?
+
+# 3. matrix_power(T, 50)[0] — did the walk settle to a steady vector?
+#    Compare with matrix_power(T, 51)[0]!
+
+# 4. This walk is PERIODIC (leaves and hub alternate forever — the graph
+#    is bipartite). Why doesn't real diffusion pseudotime hit this?
+
+# 5. The stationary distribution is still well-defined: solve pi @ T = pi.
+#    Which cell has the biggest share, and how much? (hint: hub degree)
+
+# 6. rng.beta(1.2, 1.2, 5) — run twice with the same rng: same values?
+#    What does that tell you about seeding discipline in notebooks?
+
+# 7. spearmanr([1,2,3,4,5], [10, 20, 5, 40, 50]).statistic — why 0.8?
+
+# 8. If a REAL diffusion walk mixed 100% (P rows all equal), what would
+#    happen to every pseudotime value?
+
+# 9. What breaks first on a CYCLIC process (cells returning to root):
+#    pseudotime values or branch assignments?
+
+# 10. Root swapped to the most-differentiated cell: does Spearman flip
+#     sign, get mirrored (1-rho), or stay? (think, then try)
+```
+
+::: {.callout-tip collapse="true"}
+## Expected answers
+1. Yes — every row sums to exactly 1.0
+2. `T^2[0] = [0.5, 0, 0.5]` (via the hub), then `T^3[0] = [0, 1, 0]` —
+   back to the hub, guaranteed
+3. `[0.5, 0, 0.5]` again — alternating forever: `T^51[0] = [0, 1, 0]`.
+   The chain is **periodic** (bipartite: leaves ↔ hub), so powers oscillate
+   and never settle. Deterministic-looking beats in a random walk!
+4. Real Gaussian-kernel graphs are not bipartite — symmetric weights create
+   effective self-transitions (a cell is similar to itself), which breaks
+   periodicity and lets the walk genuinely mix
+5. π = (0.25, 0.5, 0.25) — the hub's degree-2 in-degree gives it half the
+   stationary mass; hubs distort naive walk-based densities (why PAGA
+   uses graph weights carefully)
+6. Same values — one rng consumes state sequentially; re-seed per
+   experiment or your "replicates" are secretly identical
+7. Only the pair (3, 5) is out of order → 1 − (2·0.1) = 0.8
+8. Every row identical → every distance-to-root = 0 → pseudotime flatlines.
+   Partial mixing is the entire game; t is chosen to sit before the collapse
+9. Pseudotime — a cycle folds onto itself and distances plateau; branch
+   structure may survive. This is why PAGA plots exist
+10. Mirrored: distance from the most-differentiated cell ≈ 1 − distance
+    from the root (on a linear lineage). Same axis, backwards
+:::
+
+## Exercises
+
+### Exercise 1 — root sensitivity (the honesty drill)
+
+Re-run the DPT cell with `root = int(np.argmax(prog_score))` (a fully
+mature, branch-A cell). Predict first: does Spearman flip sign (mirror
+axis) or do something worse? Python:
+
+```{pyodide}
+#| exercise: ex-d2-root
+# reuse P, ps, prog_score, dpt machinery from the lesson cells
+root_wrong = ______
+dpt_wrong = ______
+from scipy.stats import spearmanr
+print("root true ps:", round(ps[root_wrong], 3))
+print("Spearman:", round(spearmanr(ps, dpt_wrong).statistic, 3))
+```
+
+::: {.hint exercise="ex-d2-root"}
+`int(np.argmax(prog_score))` and the same `np.linalg.norm(P - P[root_wrong], axis=1)`.
+:::
+
+::: {.solution exercise="ex-d2-root"}
+```python
+root_wrong = int(np.argmax(prog_score))
+dpt_wrong = np.linalg.norm(P - P[root_wrong], axis=1)
+# Spearman ≈ −0.1: NOT the clean mirror you predicted! On a LINEAR lineage
+# a wrong root flips the axis (rho -> -rho). On a FORK, distances from a
+# tip cell are small for its own branch AND for the other branch near the
+# fork — the ordering scrambles. Either way the lesson: the root is a
+# biological decision, and on branched data a bad one destroys everything
+# downstream. Declare roots from markers; show the sensitivity analysis.
+```
+:::
+
+### Exercise 2 — the t in T^t
+
+Diffusion time t trades smoothing for structure. Sweep t ∈ {1, 2, 8, 32}
+and print Spearman(pseudotime, truth) for each. (Python; ~10 lines.)
+
+```{pyodide}
+#| exercise: ex-d2-tsweep
+from scipy.stats import spearmanr
+
+for t in [1, 2, 8, 32]:
+    ______
+```
+
+::: {.hint exercise="ex-d2-tsweep"}
+`P_t = np.linalg.matrix_power(T, t)`, `dpt = norm(P_t - P_t[root], axis=1)`,
+`spearmanr(ps, dpt).statistic` — print the four.
+:::
+
+::: {.solution exercise="ex-d2-tsweep"}
+```python
+for t in [1, 2, 8, 32]:
+    P_t = np.linalg.matrix_power(T, t)
+    dpt_t = np.linalg.norm(P_t - P_t[root], axis=1)
+    print(t, round(spearmanr(ps, dpt_t).statistic, 3))
+# t=1 ≈ 0.05 (local noise, no lineage), t=2 ≈ 0.57, then a PLATEAU:
+# t=8 ≈ 0.72, t=32 ≈ 0.72. On this real-data-shaped (non-bipartite) graph
+# the walk mixes but never fully collapses — so after the climb you get a
+# stable plateau, not a crash. The plateau is the defensible t-range;
+# report it in methods.
+```
+:::
+
+### Exercise 3 — branch recovery by clustering (R)
+
+Late cells (ps > 0.5 in spirit) split into two fates. Using the R walk
+output: take the top-3 PCs of the branched cells only, k-means into 2
+clusters, and cross-tab against... you don't have truth labels in R — so
+instead report the **silhouette-style check**: mean within-cluster PC1-3
+distance vs between-cluster distance.
+
+```{webr}
+#| exercise: ex-d3-rbranch
+late <- ps > 0.5
+set.seed(4)
+km <- kmeans(pc[late, 1:3], centers = 2, nstart = 10)
+
+d <- as.matrix(dist(pc[late, 1:3]))
+within <- mean(d[km$cluster == 1, km$cluster == 1])
+between <- mean(d[km$cluster == 1, km$cluster == 2])
+c(within = round(within, 2), between = round(between, 2))
+```
+
+::: {.hint exercise="ex-d3-rbranch"}
+Nothing fancy: subset `d` by cluster membership twice; the claim is
+`within << between`.
+:::
+
+::: {.solution exercise="ex-d3-rbranch"}
+```r
+# within ≈ 0.9, between ≈ 11.7 on this seed — cells within a fate are
+# ~13x closer to each other than the two fates are to each other. That
+# ratio (a crude silhouette) is the evidence a branch is REAL, before
+# any branch-gene is named.
+```
+:::
+
+### Exercise 4 — PAGA in miniature
+
+PAGA asks: which clusters are connected beyond chance? Build two clusters'
+edge counts from the day's kNN graph: count kNN edges that cross between
+late-A and late-B cells vs edges staying within each group. Report the
+3 counts in a small table. Python:
+
+```{pyodide}
+#| exercise: ex-d4-paga
+lateA = (branch == "A"); lateB = (branch == "B"); trunk = (branch == "trunk")
+# reuse knn (n x 15 neighbor indices) from the diffusion cell
+cross = withinA = withinB = 0
+for i in range(n):
+    for j in knn[i]:
+        ______
+print(pd.DataFrame({"within-A": withinA, "within-B": withinB,
+                    "A-B cross": cross}, index=["edges"]))
+```
+
+::: {.hint exercise="ex-d4-paga"}
+Classify each neighbor pair: both in A → withinA; both in B → withinB;
+one in each late branch → cross. Trunk edges don't count.
+:::
+
+::: {.solution exercise="ex-d4-paga"}
+```python
+for i in range(n):
+    for j in knn[i]:
+        pair = {branch[i], branch[j]}
+        if pair == {"A"}:
+            withinA += 1
+        elif pair == {"B"}:
+            withinB += 1
+        elif pair == {"A", "B"}:
+            cross += 1
+# within-A ≈ 1100, within-B ≈ 1400, A-B cross = 0 EXACTLY — the fates
+# don't share a single neighbor after the fork. THAT sparse table is what
+# sc.pl.paga draws as a graph, and a missing A-B edge means "no evidence
+# for a continuum", not just "we didn't draw it".
+```
+:::
+
+### Exercise 5 — the over-interpretation audit
+
+You receive a reviewer's claim: *"Pseudotime shows cells become stem-like
+again at the branch tips, so dedifferentiation occurs."* Given everything
+today — which TWO checks would you demand before accepting it? (Answer in
+a comment; no code needed. R or Python pad.)
+
+```{pyodide}
+#| exercise: ex-d5-audit
+# Write your two demanded checks as comments, then run this cell:
+print("""
+Checks I would demand before believing dedifferentiation:
+1. ______
+2. ______
+""")
+```
+
+::: {.hint exercise="ex-d5-audit"}
+Think: what does the root assumption do to tip cells? What does a cycle or
+continuous spectrum do to "tips"? And where are the marker genes?
+:::
+
+::: {.solution exercise="ex-d5-audit"}
+```text
+1. Root + direction audit: "stem-like at the tips" means tip cells sit near
+   the ROOT in diffusion space. If the authors chose the root by clustering
+   (or worse, by PC1 sign), tip-proximity may be an artifact of their own
+   choice. Demand marker-based justification of the root, and show
+   pseudotime with the root swapped (Exercise 1's mirror test).
+2. Topology + markers: tips-far-from-root is also exactly what a CONTINUOUS
+   spectrum (no tree at all) looks like, and dedifferentiation needs
+   stem-marker RE-EXPRESSION, not just distance. Demand PAGA-style
+   connectivity evidence plus stem-marker expression along pseudotime.
+   Distance is a claim about geometry; dedifferentiation is a claim about
+   gene regulation.
+```
+:::
+
+## Common pitfalls (real ones)
+
+::: {.callout-warning}
+## 1. Diffusion time pulled out of a hat
+T^8 is a choice. t too small = noise; too large = everything collapses to
+the stationary distribution and pseudotime flatlines. Sweep t (Exercise 2)
+and say your t in the methods section.
+:::
+
+::: {.callout-warning}
+## 2. Root chosen by the algorithm
+`argmin`/`argmax` of a PC is a coordinate sign, not a biological identity.
+Every downstream "early vs late" claim inherits that silent decision.
+:::
+
+::: {.callout-warning}
+## 3. Over-clustering then over-trusting PAGA
+PAGA edges reflect *your* clustering resolution. Split a continuum into 12
+clusters and PAGA will happily draw a 12-node "tree" of nothing. Cluster
+coarsely first; split only where edges AND markers support it.
+:::
+
+## Self-quiz — predict the output
+
+```{pyodide}
+#| label: quiz
+# T from the drills (row-stochastic hub walk)
+
+# Q1: T @ T @ T equals matrix_power(T, 3) — True or False?
+
+# Q2: (matrix_power(T, 50))[1][0] — what is it, and why isn't it the
+#     stationary mass?
+
+# Q3: If W is symmetric but T = W / rowSums(W) is not, why is T still
+#     the 'right' operator for a random walk?
+
+# Q4: spearmanr(ps, dpt) = 0.95 with root A; with root B it's -0.95.
+#     Which root points 'forward'?
+
+# Q5: Your kNN graph has an isolated cell (no mutual neighbors within
+#     cutoff). What does connected-components clustering assign it,
+#     and what should you do with it?
+```
+
+::: {.callout-tip collapse="true"}
+## Quiz answers
+1. True — `A @ B @ C` chains left to right, same as the power
+2. Exactly 0 — row 1 of an even power is `[0, 1, 0]` (the periodicity
+   drill again). The stationary mass (0.5 for the hub) only appears in the
+   *time-averaged* walk, never in T^t itself for this bipartite toy
+3. Rows sum to 1 → each step is a valid probability move; asymmetry just
+   means transition chance depends on where you ARE (that's the point)
+4. Root A — its pseudotime grows with true maturation (positive rho)
+5. Its own singleton component → today's size filter marks it unassigned
+   (−1); in practice inspect it (doublet? dead cell? genuinely novel?) —
+   never silently drop it
+:::
+
+## Wrap-up checklist
+
+- [ ] I can explain a diffusion pseudotime in one sentence: "random-walk
+      distance from a biologically-chosen root cell"
+- [ ] I know T^t's t controls smoothing — and I would sweep it
+- [ ] The root is a biological claim; swapping it mirrors the axis (I proved it)
+- [ ] PAGA evidence = sparse cross-edge table, not a pretty graph drawing
+- [ ] Pseudotime is geometry; dedifferentiation is regulation — different claims
+- [ ] I know where the real tools live: `scripts/singlecell/` + Colab
+
+**Tomorrow:** hidden states that emit letters — the full HMM toolbox
+(forward, backward, Viterbi, Baum-Welch) and k-mer classifiers.
