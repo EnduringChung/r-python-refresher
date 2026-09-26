@@ -1,0 +1,8 @@
+/* Course-wide tweaks */
+.cell-output pre {
+  font-size: 0.85em;
+}
+
+details > summary {
+  cursor: pointer;
+}

@@ -1,0 +1,4 @@
+/PLAN.md
+/_quarto.yml
+*.quarto_ipynb
+/.quarto/

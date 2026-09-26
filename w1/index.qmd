@@ -1,0 +1,18 @@
+---
+title: "Week 1 — Language core, side-by-side"
+---
+
+::: {.callout-caution appearance="simple"}
+## Under construction
+
+Week 1 content is written in Phase 2 (see `PLAN.md`). Today this page just
+exists so site navigation works.
+:::
+
+## Planned days
+
+1. Setup + The 7 Patterns of R
+2. Data structures, side-by-side
+3. Control flow + functions
+4. Algorithm Gym #1: Big-O, arrays, hash maps
+5. Strings, factors, dates + **Project 1**

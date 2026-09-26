@@ -1,0 +1,52 @@
+---
+title: "R + Python Refresher"
+subtitle: "A 5-week side-by-side refresher — stats, ML & bioinformatics"
+---
+
+::: {.callout-note appearance="simple"}
+## How to use this course on an iPad
+
+1. Open this site in **Safari** (works on Mac/Windows too).
+2. Read a lesson, **type or edit code directly in the grey code boxes**, press
+   **Run** (▶) and see output right below.
+3. Your edits are **saved automatically** in the browser — close the tab and
+   come back anytime.
+4. Exercises have collapsible **Hints** and **Solutions** — try first, peek later.
+5. Cells marked 🧊 *frozen* show real pre-computed output but can't run in the
+   browser — run the matching script in `scripts/` locally. Cells with a
+   ▶ **Colab badge** open a free cloud notebook (used for single-cell / scanpy).
+:::
+
+## What this is
+
+A comprehensive refresher built for a specific learner:
+
+- **R**: you know the basics and package names, but most of your R is
+  AI-generated and the syntax feels unpredictable. We fix that with
+  **pattern-first R**: every topic reduced to one canonical pattern, plus
+  *read-and-refactor-AI-code* drills every week.
+- **Python**: you code fine but classes, `__init__`, and architecture are
+  shaky. Dedicated lessons in Week 3.
+- **Algorithms**: LeetCode beginner. One **Algorithm Gym** day per week,
+  progressive and bio-flavored.
+- **Reproducibility**: seeds, environments (renv + uv), git, tests, project
+  structure — enforced in every weekly project.
+
+Everything is taught **side-by-side**: same task in R and Python.
+
+## Course map
+
+| Week | Theme | Project |
+|---|---|---|
+| [W1] | Language core side-by-side + The 7 Patterns of R + Gym #1 | P1: messy CSV → tidy dataset, both languages |
+| [W2] | Wrangling, ggplot2/matplotlib, statistics + Gym #2 | P2: EDA + stats report (Quarto, seeded) |
+| [W3] | Python OOP & architecture, repro stack, testing + Gym #3 | P3: `bioseqkit` R package + Python package w/ CI |
+| [W4] | ML (tidymodels ↔ sklearn), sequences, RNA-seq + Gym #4 | P4: DE + classifier mini-study |
+| [W5] | Single-cell, trajectories, HMMs, multi-omics | Capstone: end-to-end mini-study |
+
+[W1]: w1/index.qmd
+
+## Start here
+
+→ Go to [Setup & Smoke Test](setup.qmd), run the live cells, confirm everything
+works on your device before Week 1.

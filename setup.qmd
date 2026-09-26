@@ -1,0 +1,130 @@
+---
+title: "Setup & Smoke Test"
+subtitle: "Verify the live coding environment works on your device"
+---
+
+This page checks that interactive code runs in your browser. **Nothing needs to
+be installed on your iPad** — the R and Python engines download once (first
+load takes ~10–30 seconds on Wi-Fi) and are cached afterwards.
+
+::: {.callout-warning appearance="simple"}
+## First-load tips (iPad Safari)
+
+- Use **Wi-Fi** the first time; the engine download is one-time per site.
+- If a cell ever stalls, tap **Restart** (⟳) in the cell toolbar.
+- Turn off **Lock** during a session; backgrounding Safari mid-download can
+  pause it.
+:::
+
+## 1. R smoke test
+
+This cell loads **dplyr and ggplot2** from the WebAssembly R repository and
+plots a classic dataset. Press **Run**.
+
+```{webr}
+#| label: r-smoke
+library(dplyr)
+library(ggplot2)
+
+mtcars |>
+  group_by(cyl) |>
+  summarise(mean_mpg = mean(mpg), n = n())
+```
+
+```{webr}
+#| label: r-plot
+library(ggplot2)
+ggplot(mtcars, aes(wt, mpg, colour = factor(cyl))) +
+  geom_point(size = 3) +
+  theme_minimal() +
+  labs(title = "If you see this plot, R graphics work")
+```
+
+## 2. Python smoke test
+
+This cell uses **pandas** and **matplotlib** (Pyodide engine).
+
+```{pyodide}
+#| label: py-smoke
+import pandas as pd
+
+df = pd.DataFrame({"cyl": [4, 6, 8], "mean_mpg": [26.66, 19.74, 15.10]})
+df
+```
+
+```{pyodide}
+#| label: py-plot
+import matplotlib.pyplot as plt
+import numpy as np
+
+x = np.linspace(0, 2 * np.pi, 100)
+plt.plot(x, np.sin(x), label="sin")
+plt.plot(x, np.cos(x), label="cos")
+plt.legend()
+plt.title("If you see this plot, Python graphics work")
+plt.show()
+```
+
+## 3. Bioinformatics packages in the browser
+
+Biopython runs live in this course:
+
+```{pyodide}
+#| label: py-bio
+from Bio.Seq import Seq
+
+dna = Seq("ATGGCCATTGTAATGGGCCGCTGAAAGGGTGCCCGATAG")
+print(f"Length:       {len(dna)}")
+print(f"Reverse comp: {dna.reverse_complement()}")
+print(f"Protein:      {dna.translate()}")
+```
+
+## 4. Exercise mechanics
+
+Exercises give you a starter, an optional hint, and a collapsible solution.
+**Complete the function** so it returns GC content as a percentage, then press
+**Run Code** and **Submit Answer**:
+
+```{webr}
+#| exercise: ex-gc
+gc_content <- function(seq) {
+  # Your code here: (number of G + C) / length * 100
+  ______
+}
+gc_content("ATGGCCATTGTAATGGGCCGCTGAAAGGGTGCCCGATAG")
+```
+
+::: {.hint exercise="ex-gc"}
+Count the `G`s and `C`s with `str_count()` or `grepl`, divide by `nchar(seq)`,
+multiply by 100.
+:::
+
+::: {.solution exercise="ex-gc"}
+```r
+gc_content <- function(seq) {
+  sum(strsplit(toupper(seq), "")[[1]] %in% c("G", "C")) / nchar(seq) * 100
+}
+gc_content("ATGGCCATTGTAATGGGCCGCTGAAAGGGTGCCCGATAG")
+```
+:::
+
+## 5. Report a failure
+
+If any cell above errors, stalls, or never finishes loading:
+
+- Note the **section number** and the **error text**
+- Try Safari's *Reload the Page* once
+- Tell me (in our session) — the fix is usually a cell option or engine tweak,
+  not a change of platform
+
+## What got installed on your Mac (authoring only)
+
+| Tool | Purpose | Status |
+|---|---|---|
+| Quarto 1.10.18 | renders the course site | `~/opt/quarto` |
+| quarto-live extension | live cells + exercises | `_extensions/` |
+| R 4.4.1 + knitr | rendering frozen R lessons | system |
+| Python 3.12 + jupyter | rendering frozen Python lessons | anaconda |
+| git | version control + GitHub Pages deploy | system |
+
+Your iPad needs **none of the above** — it only opens the published site.

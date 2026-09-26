@@ -1,0 +1,30 @@
+project:
+  type: website
+  render:
+    - "*.qmd"
+    - "!PLAN.md"
+
+website:
+  title: "R + Python Refresher"
+  navbar:
+    background: primary
+    left:
+      - href: index.qmd
+        text: Home
+      - href: setup.qmd
+        text: Setup & Smoke Test
+    right:
+      - icon: github
+        href: https://github.com/
+  page-navigation: true
+
+format:
+  live-html:
+    theme: cosmo
+    toc: true
+    code-copy: true
+    code-overflow: wrap
+    css: styles.css
+
+metadata:
+  lang: en
