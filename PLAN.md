@@ -140,9 +140,63 @@ R and Python Refresher/
 | 3 | Week 3 (OOP, architecture, repro stack, P3 with CI) | P3 CI green |
 | 4 | Weeks 4–5 (ML, bioinformatics, frozen-output lessons, Colab badges, capstone) | Colab badges work; frozen outputs match scripts |
 
-## 7. Decisions still open
+## 7. Decisions (resolved)
 
-1. **GitHub account + Pages hosting** — do you have a GitHub account for the free hosting? (Required for the iPad loop; otherwise start with `quarto preview` on Mac.)
-2. **Week 5 capstone** — include it, or fold essential bits into Week 4 and stop at 4 weeks?
-3. **Datasets** — synthetic/toy data only (simpler, offline), or real public data (GEO/ENCODE, more realistic, needs downloads)?
-4. **Qmd execution engine** — default `jupyter` needs local Python at render time (fine on your Mac); `knitr` alternative documented as fallback.
+1. **Hosting**: GitHub Pages, repo `EnduringChung/r-python-refresher`, deploy via Actions on push. Live at https://enduringchung.github.io/r-python-refresher/
+2. **Week 5 capstone**: included
+3. **Datasets**: mix — toy data checked in + real public datasets for projects
+4. **Render engine**: default jupyter (Python on Mac); knitr available for frozen R lessons
+
+---
+
+## 8. Authoring standards (locked in after Week 1 — follow for Weeks 2–5)
+
+### Per-day content checklist (the "depth standard")
+
+- [ ] Cheat sheet table at top (60–90 sec scan)
+- [ ] Prose explains the **why**, not just syntax (each pattern gets its motivation)
+- [ ] **Drill pad**: ~12 tasks, easy → spicy, one live cell per language
+- [ ] **5–6 graded exercises** (at least one Python), each with `.hint` + `.solution` divs linked via `exercise="key"`
+- [ ] **Common pitfalls** section — real bugs only, harvested from verification runs
+- [ ] **Self-quiz**: 5 predict-the-output questions + collapsed answers
+- [ ] Wrap-up checklist with checkbox items
+
+### Language parity rules
+
+- Every concept shown in **both** dialects; Python blocks are **live `{pyodide}` cells, never static ` ```python `** (static only for: conceptual comments, solution listings, ❌ bad-code exhibits)
+- Where feasible, R and Python examples produce **identical numbers** on the same data (Project 1 pattern: both solutions print 120 rows / 13 NAs / identical means)
+- Pyodide cannot fetch URLs (`pd.read_csv(url)` fails) → inline data or checked-in files; keep in-browser datasets small (Safari memory ceiling)
+- Python cells auto-print only the **last** bare expression → `print()` everything
+
+### Code verification workflow (mandatory before any deploy)
+
+1. Extract and run **all** R snippets via `Rscript`, all Python via `python3`, with assertions on claimed outputs
+2. Answer keys are guilty until proven: 6 of Week 1's keys were wrong until executed. Never "verify by reasoning"
+3. R `identical()` is type-strict (`c(2,3)` vs `c(2L,3L)` fails) — use `all.equal()` for numeric comparisons in tests
+4. After every recode/factor relevel: count NAs (the `CTRL` → `"ctrl"` → NA class of bug)
+
+### Quarto Live syntax facts (learned the hard way)
+
+- `.hint`/`.solution` divs MUST carry `exercise="key"`; solution code inside is a **static** fenced block, not a cell
+- Fill-in blanks need **6+ underscores** (`______`)
+- `::: {.callout-collapse}` doesn't exist — use `::: {.callout-tip collapse="true"}`
+- `.quartoignore` unreliable for excluding files → use `project.render` list in `_quarto.yml`
+- `{webr}`/`{pyodide}` cells share one session per page per language — `library()`/`import` once
+- First pyodide package load (statsmodels etc.) can take ~30s — warn learners in a comment
+- R facts that bit us: `wday(label=TRUE)` → "Thu" (3 letters); `table()["missing"]` → NA (Python `Counter` → 0); `read_csv` trims header spaces, `pd.read_csv` doesn't; `Date - POSIXct` = garbage, convert with `as_datetime()` first
+
+### Deploy ritual (every content batch)
+
+1. `quarto render` → grep for errors
+2. Commit + push → `gh run watch` until success
+3. `curl` the changed pages for HTTP 200 (watch URL typos — `.qmd.html` happened)
+4. Sanity-grep deployed HTML for cell wiring (`webr-`, `pyodide-data`)
+
+## 9. Remaining build queue
+
+- [ ] **Week 2**: wrangling grammar, ggplot2↔matplotlib, statistics + Project 2 (Quarto report) — at §8 standard
+- [ ] **Week 3**: Python OOP/architecture, repro stack (renv/uv/git/tests), Algorithm Gym #3, Project 3 (bioseqkit R+Python packages with CI)
+- [ ] **Week 4**: tidymodels↔sklearn, classifiers/evaluation, sequences (Biopython/pysam live), DESeq2/edgeR frozen lessons, Algorithm Gym #4, Project 4
+- [ ] **Week 5**: single-cell (Colab badges), trajectories/pseudotime, HMMs from scratch, multi-omics, capstone
+- [ ] Master cheat-sheet index page (`cheatsheets/`)
+- [ ] Consider Posit Cloud path for R-Bioconductor lessons on iPad (open decision)
