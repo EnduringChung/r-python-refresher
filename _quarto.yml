@@ -19,6 +19,10 @@ website:
       - setup.qmd
       - section: "Week 1 — Language core"
         contents: w1/*.qmd
+      - section: "Week 2 — Wrangling, viz, stats"
+        contents: w2/*.qmd
+      - section: "Week 3 — Software engineering + repro"
+        contents: w3/*.qmd
   page-navigation: true
 
 format:

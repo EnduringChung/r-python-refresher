@@ -47,6 +47,7 @@ ggplot(genes, aes(x = log2fc, y = logp, color = sig)) +
 
 ```{pyodide}
 #| label: grammar-py
+import math
 import matplotlib.pyplot as plt
 
 log2fc = [2.1, -1.8, 0.5, 3.0, 0.1, -0.4, 1.2, -2.2, 0.8, 2.5]
@@ -58,7 +59,7 @@ for flag, style in [(True, "tab:red"), (False, "tab:gray")]:
     xs = [x for x, s in zip(log2fc, sig) if s == flag]
     ys = [y for y, s in zip(logp, sig)   if s == flag]
     ax.scatter(xs, ys, c=style, s=60, alpha=0.8, label=f"padj<0.05={flag}")
-ax.axhline(-__import__("math").log10(0.05), ls="--", c="k", lw=1)
+ax.axhline(-math.log10(0.05), ls="--", c="k", lw=1)
 ax.set(xlabel="log2 fold change", ylabel="-log10 p", title="Volcano plot")
 ax.legend()
 plt.show()
@@ -76,7 +77,8 @@ somewhere, and ggplot's price is that you think in **mappings** instead.
 library(tidyverse)
 df <- tibble(x = 1:5, y = c(2, 3, 5, 4, 7), grp = c("A", "A", "B", "B", "B"))
 
-# WRONG (but legal): colors every point red — "red" is a setting
+# WRONG (but legal): maps the CONSTANT string "red" — all points get the
+# same (first default-palette) color AND a pointless legend appears
 ggplot(df, aes(x, y, color = "red")) + geom_point()
 
 # RIGHT: color VARIES with grp — a mapping
@@ -201,9 +203,11 @@ try it:
 ```{pyodide}
 #| label: seaborn-demo
 #| packages: [seaborn]
+import pandas as pd
 import seaborn as sns
 import matplotlib.pyplot as plt
-assay = __import__("pandas").DataFrame({
+
+assay = pd.DataFrame({
   "treatment": ["control"]*6 + ["treated"]*6,
   "conc": [9, 11, 12, 10, 14, 13, 18, 21, 17, 22, 19, 20]})
 
@@ -616,13 +620,15 @@ ggplot(df, aes(x, y)) + geom_histogram()
 ::: {.callout-tip collapse="true"}
 ## Quiz answers
 1. 4 points, 2 colors + a legend — mapped
-2. 4 blue points, no legend — set... actually: setting outside `aes()` at
-   the plot level does nothing to geoms here; points render with the default
-   color and no legend. The fix is `geom_point(color = "blue")`
+2. 4 points in matplotlib's default color, **no legend** — a `color` passed
+   to `ggplot()` itself is not a setting geoms can see. To paint them blue:
+   `geom_point(color = "blue")`
 3. Both — geoms stack; order = drawing order
 4. 2 — one per level of g
-5. No — it runs and bins `y` (the only aesthetic); a warningless histogram
-   of the wrong variable is worse than an error. Read your x-axis.
+5. **Yes** — modern ggplot2 refuses: "must only have an x or y aesthetic."
+   Older versions silently binned `y`; current code makes you choose. The
+   lesson stands either way: read the x-axis (or the error) before trusting
+   a histogram.
 :::
 
 ## Wrap-up checklist

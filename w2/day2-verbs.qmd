@@ -112,10 +112,10 @@ genes |>
   mutate(
     sig      = padj < 0.05,
     direction = case_when(
-      is.na(padj)          ~ "unknown",
+      is.na(padj)                  ~ "unknown",
       padj < 0.05 & log2fc > 0  ~ "up",
       padj < 0.05 & log2fc < 0  ~ "down",
-      .default                  ~ "ns"
+      .default                  = "ns"
     )
   )
 ```
@@ -138,7 +138,7 @@ The translation table for conditional columns:
 | R | Python |
 |---|---|
 | `if_else(cond, yes, no)` | `np.where(cond, yes, no)` |
-| `case_when(c1 ~ v1, c2 ~ v2, .default ~ v3)` | `np.select([c1, c2], [v1, v2], default=v3)` |
+| `case_when(c1 ~ v1, c2 ~ v2, .default = v3)` | `np.select([c1, c2], [v1, v2], default=v3)` |
 | `replace_na(x, 0)` | `s.fillna(0)` |
 
 ## The split → apply → combine spine
@@ -169,9 +169,9 @@ assay |>
 #| label: gsa-py
 import pandas as pd
 assay = pd.DataFrame({
-  "treatment": ["control"]*2 + ["treated"]*2,
+  "treatment": ["control"]*4 + ["treated"]*4,
   "peptide":   ["SubP", "Vaso", "SubP", "Vaso"] * 2,
-  "conc":      [10.1, 20.5, 11.3, 19.2, 9.8, 21.8, 12.0, 18.9]})
+  "conc":      [10.1, 11.3, 9.8, 12.0, 20.5, 19.2, 21.8, 18.9]})
 
 (assay
   .groupby(["treatment", "peptide"])["conc"]
@@ -207,7 +207,7 @@ qc <- tibble(sample = c("S1", "S2", "S3"),
 
 qc |>
   rowwise() |>
-  mutate(fail = sum(c_across(pct_dup:pct_map) > c(20, 80)) >= 1) |>
+  mutate(fail = any(pct_dup > 20, pct_map < 80)) |>
   ungroup()
 ```
 

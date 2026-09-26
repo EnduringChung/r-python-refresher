@@ -1,0 +1,188 @@
+---
+title: "Peptide Assay — Exploratory Analysis and Statistical Report"
+subtitle: "Project 2 reference report (R · knitr)"
+format: html
+engine: knitr
+execute:
+  echo: true
+  warning: false
+---
+
+## Setup
+
+```{r}
+#| label: setup
+library(tidyverse)
+library(broom)
+set.seed(42)
+
+dat <- read_csv("data/peptides_assay_clean.csv", show_col_types = FALSE)
+dim(dat)
+```
+
+120 wells, 7 columns — the tidy table produced by Project 1.
+
+## Exploratory analysis
+
+```{r}
+#| label: missingness
+colSums(is.na(dat))
+```
+
+Only `concentration_ng_ul` has missing values (13 of 120). A missing
+concentration means the *measurement* failed — bad well, pipetting error,
+instrument hiccup — not that the sample didn't exist. That distinction
+decides what we do with them: keep the rows, exclude per-analysis
+(`na.rm`/`filter`), and ask in Q3 whether the failures cluster by batch.
+
+```{r}
+#| label: fig-raw
+#| fig-width: 6
+#| fig-height: 4
+ggplot(dat, aes(concentration_ng_ul)) +
+  geom_histogram(binwidth = 10, fill = "steelblue", color = "white") +
+  labs(x = "concentration (ng/uL)", y = "wells",
+       title = "Concentrations pile up low with a long right tail")
+```
+
+```{r}
+#| label: normality
+shapiro.test(dat$concentration_ng_ul)$p.value
+shapiro.test(log10(dat$concentration_ng_ul))$p.value
+```
+
+Raw-scale Shapiro rejects normality decisively (p ≈ 6×10⁻⁸) — the
+histogram's skew is real, not sampling noise. On the log10 scale the test
+finds no evidence against normality (p ≈ 0.73): **the data are
+lognormal**, so all parametric testing happens on the log scale, and
+medians (not means) summarize the raw values.
+
+## Q1 — does treatment change concentration?
+
+```{r}
+#| label: q1
+dat |>
+  group_by(treatment) |>
+  summarise(median_conc = median(concentration_ng_ul, na.rm = TRUE),
+            n = sum(!is.na(concentration_ng_ul)), .groups = "drop")
+
+t.test(concentration_ng_ul ~ treatment, data = dat)
+t.test(log10(concentration_ng_ul) ~ treatment, data = dat) |>
+  tidy()
+```
+
+Raw-scale Welch: |t| ≈ 0.06, p ≈ 0.96. Log-scale Welch: |t| ≈ 0.19,
+p ≈ 0.85. Medians differ by ~8% in *either* direction of noise. **No
+detectable treatment effect** — and per Q4 below, this design would have
+caught a +50% effect most of the time, so this null is informative.
+
+## Q2 — two-way ANOVA
+
+```{r}
+#| label: q2
+dat |>
+  filter(!is.na(concentration_ng_ul)) |>
+  mutate(log_conc = log10(concentration_ng_ul)) |>
+  aov(log_conc ~ treatment * peptide, data = _) |>
+  tidy()
+```
+
+Every term is null: treatment p ≈ 0.81, peptide p ≈ 0.85, interaction
+p ≈ 0.19. In words: no treatment effect, no peptide-to-peptide difference,
+and — via the interaction — no evidence that treatment acts differently on
+different peptides.
+
+## Q3 — is missingness associated with batch?
+
+```{r}
+#| label: q3
+tab <- table(dat$batch, is.na(dat$concentration_ng_ul),
+             dnn = list("batch", "missing"))
+tab
+chisq.test(tab)
+```
+
+χ² ≈ 2.76, df = 2, p ≈ 0.25 — no association between batch and failure.
+Honest caveat: the expected count in the "missing" cells is ≈ 4.3, below
+the χ² rule-of-thumb of 5 (R warns about exactly this), so the exact test
+is the safer word:
+
+```{r}
+#| label: q3-fisher
+fisher.test(tab, workspace = 2e8)$p.value
+```
+
+Fisher's exact p ≈ 0.29 — same conclusion, sturdier footing.
+
+## Q4 — would this design have detected a +50% effect?
+
+```{r}
+#| label: q4
+n <- 50
+pvals <- replicate(500, {
+  t.test(rlnorm(n, log(25) + 0.4, 0.6),   # treated: +50%
+         rlnorm(n, log(25),      0.6))$p.value
+})
+mean(pvals < 0.05)
+```
+
+Empirical power ≈ 0.85 (seeded, reproducible). If treatment truly boosted
+concentrations by 50%, this design would have flagged it ~85% of the time
+at these sample sizes. The Q1 null therefore means "no effect anywhere
+near +50%", not "we couldn't see".
+
+## Figures
+
+```{r}
+#| label: figs-box
+#| fig-width: 5
+#| fig-height: 4
+dat |>
+  filter(!is.na(concentration_ng_ul)) |>
+  mutate(log_conc = log10(concentration_ng_ul)) |>
+  ggplot(aes(treatment, log_conc, fill = treatment)) +
+  geom_boxplot(show.legend = FALSE, outlier.alpha = 0.4) +
+  labs(x = NULL, y = "log10 concentration (ng/uL)",
+       title = "Treatment groups are indistinguishable on the log scale")
+```
+
+```{r}
+#| label: figs-int
+#| fig-width: 6
+#| fig-height: 4
+dat |>
+  filter(!is.na(concentration_ng_ul)) |>
+  mutate(log_conc = log10(concentration_ng_ul)) |>
+  group_by(treatment, peptide) |>
+  summarise(m = mean(log_conc), .groups = "drop") |>
+  ggplot(aes(peptide, m, color = treatment, group = treatment)) +
+  geom_line(linewidth = 1) +
+  geom_point(size = 3) +
+  labs(x = NULL, y = "mean log10 concentration",
+       title = "Interaction plot: near-parallel lines agree with the ANOVA")
+```
+
+## Conclusion
+
+The assay shows no treatment effect (Q1), no peptide differences, and no
+treatment × peptide interaction (Q2), and measurement failures were random
+with respect to batch (Q3). Because the design's power to detect a +50%
+effect is ≈ 0.85 (Q4), these nulls are evidence of absence at that
+effect size — not mere absence of evidence. The right next step is not
+"run it again" but "define the smallest effect that matters"; if 20%
+matters, Q4's simulation rerun at that effect size would prescribe a much
+larger n before another plate is run.
+
+## Reproducibility receipt
+
+```{r}
+#| label: receipt
+format(Sys.time(), tz = "UTC", usetz = TRUE)
+tools::md5sum("data/peptides_assay_clean.csv")
+sessionInfo()
+```
+
+The Python twin (`projects/p2/solution.py`) reproduces every number in
+this report — Q1 t/p to three decimals, the same ANOVA table, χ² = 2.76,
+and the same power estimate — from the same seed. That cross-check is the
+reproducibility thread: one analysis, two dialects, one receipt.

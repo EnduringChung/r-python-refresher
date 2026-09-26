@@ -45,6 +45,7 @@ Everything is taught **side-by-side**: same task in R and Python.
 | [W5] | Single-cell, trajectories, HMMs, multi-omics | Capstone: end-to-end mini-study |
 
 [W1]: w1/index.qmd
+[W2]: w2/index.qmd
 
 ## Start here
 

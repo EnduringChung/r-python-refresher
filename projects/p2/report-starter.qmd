@@ -1,0 +1,97 @@
+---
+title: "Peptide Assay — Exploratory Analysis and Statistical Report"
+subtitle: "Project 2 · your name · the date you ran it"
+format: html
+engine: knitr
+execute:
+  echo: true
+  warning: false
+---
+
+## Setup
+
+Replace every `# TODO` below. Every random step uses the seed set here.
+
+```{r}
+#| label: setup
+library(tidyverse)
+library(broom)
+set.seed(42)
+
+dat <- read_csv("data/peptides_assay_clean.csv", show_col_types = FALSE)
+dim(dat)
+```
+
+## Exploratory analysis
+
+```{r}
+#| label: missingness
+# TODO: NAs per column (colSums(is.na(dat))). One sentence: what does a
+# missing concentration MEAN physically?
+```
+
+```{r}
+#| label: fig-raw
+# TODO: histogram of concentration, raw scale — binwidth chosen on purpose,
+# labeled axes, title that says the finding
+```
+
+```{r}
+#| label: normality
+# TODO: shapiro.test raw, then on log10(concentration_ng_ul).
+# One sentence: which scale satisfies the test, and what does that make
+# the data?
+```
+
+## Q1 — does treatment change concentration?
+
+```{r}
+#| label: q1
+# TODO: Welch t-test on raw AND log10 scale (formula interface);
+# medians by treatment; tidy() the log-scale test
+```
+
+## Q2 — two-way ANOVA
+
+```{r}
+#| label: q2
+# TODO: aov(log10(conc) ~ treatment * peptide) on complete cases, tidy() it.
+# One sentence per term: what does "null" mean here?
+```
+
+## Q3 — is missingness associated with batch?
+
+```{r}
+#| label: q3
+# TODO: table(batch, is.na(conc)), chisq.test — and check the expected
+# counts (they are < 5 in the 'missing' cells: what does that do to the
+# approximation, and is fisher.test the safer answer?)
+```
+
+## Q4 — would this design have detected a +50% effect?
+
+```{r}
+#| label: q4
+# TODO: 500 simulations, n = 50/group, rlnorm(log(25), 0.6) vs
+# rlnorm(log(25) + 0.4, 0.6), Welch each time — fraction of p < 0.05
+```
+
+## Figures
+
+```{r}
+#| label: figs
+# TODO: boxplot of log10 conc by treatment; interaction plot of mean
+# log10 conc by peptide (one line per treatment). Day 3 pre-flight!
+```
+
+## Conclusion
+
+TODO — five sentences maximum: what is null (Q1–Q3), what the power
+estimate (Q4) does to that claim, and what you'd do next.
+
+## Reproducibility receipt
+
+```{r}
+#| label: receipt
+# TODO: Sys.time() (UTC), tools::md5sum of the data file, sessionInfo()
+```

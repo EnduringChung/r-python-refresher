@@ -29,6 +29,7 @@ The reflex, both dialects:
 ```{webr}
 #| label: import-r
 # webR has a virtual file system — write a small messy CSV, then import it
+library(tidyverse)   # this page's first cell — loads readr, dplyr, ggplot2, ...
 writeLines(c(
   "sample_id,reads,qc,arrival",
   "S1,4.2e6,TRUE,2024-03-01",
@@ -150,7 +151,7 @@ plate_long |>
 mean_ct = (plate_long
   .groupby("gene", as_index=False)["ct"].mean()
   .rename(columns={"ct": "mean_ct"}))
-mean_ct.pivot(index=None, columns="gene", values="mean_ct")
+mean_ct.pivot(columns="gene", values="mean_ct")
 ```
 
 ::: {.callout-warning}
@@ -509,8 +510,9 @@ read_csv("tricky.csv",
                    conc   = col_double(),
                    date   = col_date(),
                    note   = col_character()))
-# NOTE the consequence: row S2 loses its date too (it was "not_a_date").
-# Declaring types forces decisions — that's the point.
+# NOTE the consequences: row S2 keeps its date but loses its conc (n/a ->
+# NA); row S3 loses its date ("not_a_date" -> NA, both by na-declaration
+# and by parse failure). Declaring types forces decisions — that's the point.
 ```
 :::
 
