@@ -1,0 +1,388 @@
+---
+title: "Day 2 — Classifiers & Evaluation"
+subtitle: "Week 4 · logistic vs forest vs boosting, and the metrics that matter"
+resources:
+  - data/p4/expr.csv
+  - data/p4/labels.csv
+---
+
+## Cheat sheet (90 seconds)
+
+| Task | R (yardstick) | Python (sklearn) |
+|---|---|---|
+| confusion matrix | `conf_mat(preds, truth, estimate)` | `confusion_matrix(y, pred)` |
+| accuracy / precision / recall / F1 | `accuracy() precision() recall() f_meas()` | `accuracy_score`, `precision_score`, `recall_score`, `f1_score` |
+| all at once | `metric_set(accuracy, sens, spec)` | `classification_report(y, pred)` |
+| ROC curve / AUC | `roc_curve()`, `roc_auc()` | `roc_curve`, `roc_auc_score` |
+| PR curve / AUC | `pr_curve()`, `pr_auc()` | `precision_recall_curve`, `average_precision_score` |
+| class probs (not just labels) | `predict(type = "prob")` | `predict_proba(X)[:, 1]` |
+| importance | `extract_fit_engine() |> ranger::importance()` | `feature_importances_` |
+
+## The day's one idea
+
+**Accuracy is one number and usually the wrong one.** A classifier is a
+*ranking + a threshold*: class probabilities, cut somewhere. Everything
+today — confusion matrices, ROC, PR — is about choosing and justifying that
+threshold for the *cost structure of your actual question*.
+
+## Train the three candidates (seeded, pipelined)
+
+```{pyodide}
+#| label: train-three
+import numpy as np
+import pandas as pd
+from sklearn.model_selection import train_test_split, cross_val_score
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import StandardScaler
+from sklearn.linear_model import LogisticRegression
+from sklearn.ensemble import RandomForestClassifier
+from lightgbm import LGBMClassifier
+
+expr = pd.read_csv("data/p4/expr.csv", index_col=0)
+labels = pd.read_csv("data/p4/labels.csv")
+Xt, y = expr.T, labels.set_index("sample_id").loc[expr.T.index, "condition"]
+
+X_tr, X_te, y_tr, y_te = train_test_split(
+    Xt, y, test_size=0.25, stratify=y, random_state=42)
+
+models = {
+    "logistic": Pipeline([("scale", StandardScaler()),
+                          ("m", LogisticRegression(max_iter=2000, random_state=42))]),
+    "forest":   Pipeline([("m", RandomForestClassifier(n_estimators=500,
+                                                       random_state=42))]),
+    "boost":    Pipeline([("m", LGBMClassifier(n_estimators=200, min_child_samples=5,
+                                               random_state=42, verbose=-1))  # min_child_samples: 45 rows can't fill default leaves]),
+}
+
+for name, m in models.items():
+    cv = cross_val_score(m, X_tr, y_tr, cv=5)
+    m.fit(X_tr, y_tr)
+    print(f"{name:8s} CV {cv.mean():.3f}±{cv.std():.3f}   test {m.score(X_te, y_te):.3f}")
+```
+
+Three model families, one interface. Note what did *not* happen: no tuning
+yet (defaults), no test-set peeking — CV on train, then a single test fit.
+
+## The confusion matrix and its children
+
+```{pyodide}
+#| label: confusion
+from sklearn.metrics import confusion_matrix, classification_report
+
+pipe = models["logistic"]
+pred = pipe.predict(X_te)
+
+print(confusion_matrix(y_te, pred, labels=["normal", "tumor"]), "\n")
+print(classification_report(y_te, pred, digits=3))
+```
+
+Read it as a story, not four numbers: rows = truth, columns = prediction.
+The diagonal is right; the off-diagonal cells have *names* —
+false "tumor" calls (false positives) and missed tumors (false negatives).
+**In a screening context those are not symmetric errors.** Which one is
+worse depends on the question — which is why the next section exists.
+
+## Probabilities, ROC, and the threshold you didn't know you chose
+
+```{pyodide}
+#| label: roc
+from sklearn.metrics import RocCurveDisplay, roc_auc_score
+import matplotlib.pyplot as plt
+
+proba = pipe.predict_proba(X_te)[:, list(pipe.classes_).index("tumor")]
+
+fig, ax = plt.subplots(figsize=(5.2, 4.2))
+for name, m in models.items():
+    p = m.predict_proba(X_te)[:, list(m.classes_).index("tumor")]
+    RocCurveDisplay.from_predictions(
+        (y_te == "tumor").astype(int), p, name=name, ax=ax)
+plt.plot([0, 1], [0, 1], "k--", lw=0.8)
+plt.title("ROC — same models, one picture")
+plt.show()
+
+print({n: round(roc_auc_score(y_te == "tumor",
+       m.predict_proba(X_te)[:, list(m.classes_).index("tumor")]), 3)
+       for n, m in models.items()})
+```
+
+ROC plots **true-positive rate vs false-positive rate at every threshold**.
+AUC = 0.5 is a coin flip; 1.0 is perfect; ~0.95+ here says the signature is
+strong. The curve is also a menu: *pick* the operating point — e.g. "accept
+10% false positives to catch 95% of tumors" — by moving the threshold.
+
+## When classes are imbalanced, PR beats ROC
+
+Make the problem artificially imbalanced (5% tumors) and watch ROC lie:
+
+```{pyodide}
+#| label: pr
+from sklearn.metrics import precision_recall_curve, average_precision_score
+
+# subsample normals: 5% prevalence, like a real screening cohort
+rng = np.random.default_rng(42)
+tumor_idx = np.where(y_te == "tumor")[0]
+normal_idx = rng.choice(np.where(y_te == "normal")[0],
+                        size=int(len(tumor_idx) / 0.05 * 0.95), replace=True)
+subset = np.concatenate([tumor_idx, normal_idx])
+y_sub = (y_te.iloc[subset] == "tumor").astype(int)
+p_sub = pipe.predict_proba(X_te.iloc[subset])[:, list(pipe.classes_).index("tumor")]
+
+prec, rec, _ = precision_recall_curve(y_sub, p_sub)
+print(f"AP (PR-AUC): {average_precision_score(y_sub, p_sub):.3f}")
+print(f"ROC-AUC unchanged by prevalence: {roc_auc_score(y_sub, p_sub):.3f}")
+print(f"prevalence in this cohort: {y_sub.mean():.3f}")
+```
+
+ROC-AUC is prevalence-invariant (same curve, looks great); PR-AUC collapses
+as prevalence drops — **it reflects what screening actually feels like.**
+Rule: rare-event problems → report PR-AUC + precision/recall at a chosen
+threshold, not accuracy, not ROC alone.
+
+## Feature importance: which genes is it using?
+
+```{pyodide}
+#| label: importance
+forest = models["forest"]
+imp = pd.Series(forest.named_steps["m"].feature_importances_, index=Xt.columns)
+top = imp.sort_values(ascending=False).head(12)
+top.plot(kind="barh", figsize=(5.5, 4), title="Random forest: top genes")
+plt.gca().invert_yaxis()
+plt.tight_layout()
+plt.show()
+
+print("planted signature genes in top 12:",
+      sum(g.startswith("SIG0") and int(g[3:]) <= 25 or
+          (g.startswith("SIG") and 1 <= int(g[3:]) <= 25) for g in top.index), "/ 12")
+```
+
+Permutation importance and coefficients tell the same story from different
+angles — and here the model *recovers the planted biology* (the 25-gene
+signature). That closes the loop with Day 5's DE analysis.
+
+## Drills (live pad)
+
+```{pyodide}
+#| label: drills
+# 1. accuracy if you predict ALL samples "normal" on y_te? (one line)
+
+# 2. precision vs recall of the "tumor" class for the logistic — compute both
+
+# 3. Move the threshold to 0.3 (was 0.5): recall up or down?
+
+# 4. classification_report with digits=2 — read F1 for both classes
+
+# 5. forest vs boost on PR-AUC — which wins here?
+
+# 6. conf_matrix WITHOUT labels= argument: which row is which? (comment)
+```
+
+::: {.callout-tip collapse="true"}
+## Expected answers
+1. `(y_te == "normal").mean()` ≈ 0.5 here — but ≈0.95 at 5% prevalence,
+   which is exactly the accuracy trap
+2. precision = TP/(TP+FP), recall = TP/(TP+FN) — use `pos_label="tumor"`
+   in sklearn functions or convert y to 0/1 first
+3. Down: lower threshold = more samples called tumor = higher recall,
+   lower precision
+4. F1 = harmonic mean; the minority class usually has the lower F1
+5. On this balanced data they're close; boost tends to win by a hair
+6. Rows/cols follow sorted class order — "normal", "tumor" — always pass
+   labels= or you're guessing
+:::
+
+## Exercises
+
+### Exercise 1 — the threshold sweep
+
+For the logistic: sweep thresholds 0.1→0.9, print precision and recall of
+"tumor" at each. Identify the threshold that maximizes F1.
+
+```{pyodide}
+#| exercise: ex-w4d2-thresh
+from sklearn.metrics import precision_score, recall_score, f1_score
+
+proba = pipe.predict_proba(X_te)[:, list(pipe.classes_).index("tumor")]
+y_true = (y_te == "tumor").astype(int)
+
+for t in [0.1, 0.3, 0.5, 0.7, 0.9]:
+    ______
+```
+
+::: {.hint exercise="ex-w4d2-thresh"}
+`pred = (proba >= t).astype(int)`, then precision/recall/F1 with
+`zero_division=0`.
+:::
+
+::: {.solution exercise="ex-w4d2-thresh"}
+```python
+for t in [0.1, 0.3, 0.5, 0.7, 0.9]:
+    pred = (proba >= t).astype(int)
+    p = precision_score(y_true, pred, zero_division=0)
+    r = recall_score(y_true, pred, zero_division=0)
+    f = f1_score(y_true, pred, zero_division=0)
+    print(f"t={t:.1f}  precision={p:.3f}  recall={r:.3f}  F1={f:.3f}")
+```
+:::
+
+### Exercise 2 — the imbalanced honesty check
+
+Same subsample trick as the lesson (5% prevalence): compute accuracy,
+ROC-AUC, and average precision for the forest. Which number would mislead
+a reviewer who only reads accuracy?
+
+```{pyodide}
+#| exercise: ex-w4d2-imbalance
+from sklearn.metrics import accuracy_score, roc_auc_score, average_precision_score
+
+forest = models["forest"]
+p_all = forest.predict_proba(X_te)[:, list(forest.classes_).index("tumor")]
+normal_idx = rng.choice(np.where(y_te == "normal")[0],
+                        size=int(len(tumor_idx) / 0.05 * 0.95), replace=True)
+subset = np.concatenate([tumor_idx, normal_idx])
+y_sub = (y_te.iloc[subset] == "tumor").astype(int)
+X_sub, p_sub = X_te.iloc[subset], p_all[subset]
+
+______
+```
+
+::: {.hint exercise="ex-w4d2-imbalance"}
+`pred = (p_sub >= 0.5).astype(int)`; accuracy will be high *because of the
+imbalance*, not skill — AP is the honest one.
+:::
+
+::: {.solution exercise="ex-w4d2-imbalance"}
+```python
+pred = (p_sub >= 0.5).astype(int)
+print(f"accuracy:   {accuracy_score(y_sub, pred):.3f}")   # looks great, means little
+print(f"ROC-AUC:    {roc_auc_score(y_sub, p_sub):.3f}")   # prevalence-invariant
+print(f"PR-AUC(AP): {average_precision_score(y_sub, p_sub):.3f}")  # the honest one
+```
+:::
+
+### Exercise 3 — the same discipline in R
+
+Recreate the confusion matrix + accuracy in tidymodels: fit the logistic
+workflow from Day 1, `predict(test, type = "class")` and `augment`, then
+`conf_mat` + `accuracy` from yardstick.
+
+```{webr}
+#| exercise: ex-w4d2-r
+library(rsample); library(parsnip); library(recipes); library(workflows); library(yardstick)
+
+set.seed(42)
+lr_fit <- fit(lr_wf, data = train)          # from Day 1's cells
+
+aug <- augment(lr_fit, test)
+______
+
+conf_mat(aug, truth = condition, estimate = .pred_class)
+```
+
+::: {.hint exercise="ex-w4d2-r"}
+`accuracy(aug, truth = condition, estimate = .pred_class)` — plus
+`conf_mat(aug, truth = condition, estimate = .pred_class)`.
+:::
+
+::: {.solution exercise="ex-w4d2-r"}
+```r
+accuracy(aug, truth = condition, estimate = .pred_class)
+conf_mat(aug, truth = condition, estimate = .pred_class)
+# augment() attaches .pred_class and .pred_<level> probability columns —
+# the tidymodels twin of predict + predict_proba
+```
+:::
+
+### Exercise 4 — stability of importance
+
+Fit the forest with `random_state=0` and `random_state=1`: are the top 12
+genes identical? What does that tell you about single-split importance
+claims? (Answer in comments after running.)
+
+```{pyodide}
+#| exercise: ex-w4d2-stability
+for seed in (0, 1):
+    m = Pipeline([("m", RandomForestClassifier(n_estimators=500,
+                                               random_state=seed))])
+    ______
+```
+
+::: {.hint exercise="ex-w4d2-stability"}
+Fit, extract `feature_importances_`, take top 12 gene names, compare sets.
+:::
+
+::: {.solution exercise="ex-w4d2-stability"}
+```python
+tops = []
+for seed in (0, 1):
+    m = Pipeline([("m", RandomForestClassifier(n_estimators=500,
+                                               random_state=seed))]).fit(X_tr, y_tr)
+    imp = pd.Series(m.named_steps["m"].feature_importances_, index=Xt.columns)
+    tops.append(set(imp.sort_values(ascending=False).head(12).index))
+print("overlap:", len(tops[0] & tops[1]), "/ 12")
+# Partial overlap — importance rankings wobble across seeds on small data.
+# Report stability (across CV folds/seeds), not one ranking.
+```
+:::
+
+## Common pitfalls (real ones)
+
+::: {.callout-warning}
+## 1. Reading metrics off the training fit
+`.score(X_train, ...)` ≈ 1.0 proves memorization, not learning. Everything
+today was evaluated on test or CV — keep it that way.
+:::
+
+::: {.callout-warning}
+## 2. Forgetting the positive class
+`precision_score(y, pred)` defaults to `pos_label=1` — with string labels
+you'll get a confusing error or silent wrongness. Convert to 0/1 or pass
+`pos_label="tumor"` explicitly.
+:::
+
+::: {.callout-warning}
+## 3. AUC on imbalanced data presented as "great performance"
+0.99 ROC-AUC at 1% prevalence can coexist with useless precision. Lead with
+PR-AUC and precision/recall at the operating threshold.
+:::
+
+::: {.callout-warning}
+## 4. Default boosting settings on small data
+LightGBM's default `min_child_samples=20` means every leaf wants 20 rows —
+with 45 training samples the model gives up and predicts the majority class
+(watch for CV equal to your class base rate). `min_child_samples=5` fixed
+it in today's cell; the general lesson: **default hyperparameters assume
+ datasets bigger than clinical/genomic cohorts usually are.**
+:::
+
+## Self-quiz — predict the output
+
+```{pyodide}
+#| label: quiz
+# Q1: a classifier with recall 1.0 and precision 0.05 — what's it doing?
+# Q2: confusion_matrix rows vs columns: which is truth?
+# Q3: predict vs predict_proba — which one ignores the threshold?
+# Q4: prevalence drops 10x: what happens to ROC-AUC? to average precision?
+# Q5: forest feature_importances_ sum to what?
+```
+
+::: {.callout-tip collapse="true"}
+## Quiz answers
+1. Calls everything positive — perfect recall, precision ≈ prevalence;
+   the "screen everyone" degenerate case
+2. Rows = truth, columns = prediction (sklearn; pass labels= to be sure)
+3. `predict_proba` — raw probabilities; `predict` applies the (0.5 or
+   trained) cutoff internally
+4. ROC-AUC ≈ unchanged; average precision drops — prevalence sensitivity
+5. 1.0 — importances are normalized across features
+:::
+
+## Wrap-up checklist
+
+- [ ] Probabilities first, threshold second — and the threshold is a decision
+- [ ] Confusion matrix read as a story (which error hurts whom)
+- [ ] Imbalanced problem → PR-AUC + operating-point precision/recall
+- [ ] Importance rankings reported with stability, not as gospel
+- [ ] I scored 5/5 on the self-quiz
+
+**Tomorrow:** sequences and genomic data — Biopython, FASTQ QC, k-mers, and
+your first BAM, all in the browser.

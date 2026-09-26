@@ -24,6 +24,8 @@ website:
         contents: w2/*.qmd
       - section: "Week 3 — Software engineering + repro"
         contents: w3/*.qmd
+      - section: "Week 4 — ML + bioinformatics I"
+        contents: w4/*.qmd
   page-navigation: true
 
 format:

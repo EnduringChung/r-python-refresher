@@ -1,0 +1,443 @@
+---
+title: "Day 3 — Sequences & Genomic Data (in the browser!)"
+subtitle: "Week 4 · Biopython, FASTQ quality, k-mers, ORFs, and a real BAM with pysam"
+---
+
+## Cheat sheet (90 seconds)
+
+| Task | Tool | Call |
+|---|---|---|
+| translate / rev-comp | Biopython | `Seq(s).translate()`, `Seq(s).reverse_complement()` |
+| parse FASTA/FASTQ | Biopython | `SeqIO.parse(handle, "fasta")` |
+| per-base quality | Biopython | `rec.letter_annotations["phred_quality"]` |
+| k-mers | (yours, P3) | `Counter(seq[i:i+k] for i in ...)` |
+| read/write BAM | pysam | `AlignmentFile("f.bam", "wb", header=...)` |
+| fetch by region | pysam | `bam.fetch("chr1", start, end)` (needs `.bai` index) |
+| genomic intervals | GenomicRanges (R, local) | `GRanges(seqnames, IRanges(start, end), strand)` |
+
+::: {.callout-note}
+## Why this day is special
+Everything runs **live in your browser** — Biopython and pysam are compiled
+for WebAssembly. No server, no install. The only thing that *can't* run
+in-browser is R's Bioconductor (Day 5 covers the workaround for that).
+:::
+
+## Biopython: the sequence object
+
+```{pyodide}
+#| label: seq-basics
+from Bio.Seq import Seq
+
+dna = Seq("ATGGCCATTGTAATGGGCCGCTGAAAGGGTGCCCGATAG")
+
+print(f"length:      {len(dna)}")
+print(f"rev-comp:    {dna.reverse_complement()}")
+print(f"translation: {dna.translate()}")       # note the internal stop!
+print(f"GC:          {sum(b in 'GC' for b in dna) / len(dna) * 100:.2f}%")
+```
+
+Look closely at the translation: `MAIVMGR*KGAR*` — there's an **internal
+stop codon** (`TGA` at position 21) before the terminal `TAG`. A naive
+ORF-finder that assumes "first ATG → last stop" gets this wrong. We won't.
+
+## FASTA in, records out
+
+```{pyodide}
+#| label: fasta
+import io
+from Bio import SeqIO
+
+fasta = """>ENST1 some transcript
+ATGGCCATTGTAATGGGCCGCTGAAAGGGTGCCCGATAG
+>ENST2 short one
+ATGGCCATTGTAATGGGCCGCTGAAAGGGTGCCCGATAGAAA
+"""
+
+for rec in SeqIO.parse(io.StringIO(fasta), "fasta"):
+    gc = sum(b in "GC" for b in rec.seq) / len(rec.seq) * 100
+    print(f"{rec.id:8s} {len(rec.seq):3d} nt   GC {gc:.1f}%   ({rec.description})")
+```
+
+`rec.id` = first whitespace token; `rec.description` = the whole header.
+In real pipelines `SeqIO.parse("transcripts.fa", "fasta")` streams a file
+the same way — this shape (lazy iterator of records) scales to gigabases.
+
+## An honest ORF scanner (3 frames)
+
+```{pyodide}
+#| label: orfs
+def orfs(seq: str, min_nt: int = 15) -> list[tuple[int, int, int]]:
+    """(frame, start, end) of ATG->stop open reading frames, 1-based frame."""
+    stops = {"TAA", "TAG", "TGA"}
+    out = []
+    for frame in range(3):
+        i = frame
+        while i < len(seq) - 2:
+            if seq[i:i+3] == "ATG":
+                j = i
+                while j < len(seq) - 2:
+                    if seq[j:j+3] in stops:
+                        if j + 3 - i >= min_nt:
+                            out.append((frame + 1, i, j + 3))
+                        break
+                    j += 3
+            i += 3 if seq[i:i+3] == "ATG" else 1
+    return out
+
+dna = "ATGGCCATTGTAATGGGCCGCTGAAAGGGTGCCCGATAG"
+print("ORFs (frame, start, end):", orfs(dna))
+```
+
+One ORF, `(frame 1, 0, 24)` — the internal `TGA` cuts it short, exactly as
+the translation showed. The scanner breaks at the *first* stop after each
+ATG and moves on; it does not scan through stops (that's what real gene
+finders with dynamic programming are for — Week 5's HMMs are the conceptual
+cousin).
+
+## FASTQ: bases + quality, the QC currency
+
+```{pyodide}
+#| label: fastq
+import io
+import numpy as np
+from Bio import SeqIO
+
+fastq = """@read1 good one
+ATGGCC
++
+IIIIII
+@read2 has a bad tail
+GGCCTT
++
+#####!
+"""
+recs = list(SeqIO.parse(io.StringIO(fastq), "fastq"))
+
+for rec in recs:
+    q = np.array(rec.letter_annotations["phred_quality"])
+    print(f"{rec.id:20s} meanQ {q.mean():5.1f}   minQ {q.min():2d}")
+
+# the classic filter: drop reads whose mean Q < 20 (1% error rate)
+good = [r for r in recs
+        if np.mean(r.letter_annotations["phred_quality"]) >= 20]
+print(f"kept {len(good)} / {len(recs)} reads")
+```
+
+Phred Q = −10·log₁₀(P(error)). Q20 = 1% error, Q30 = 0.1%, Q40 = 0.01%.
+The `'I'` character encodes Q40 (`#` is Q2, `!` is Q0) under Illumina 1.8+
+encoding — if your FASTQ predates 1.8, the same characters mean different
+Q values, and QC thresholds silently shift. When in doubt: `head` a file,
+check which Q range the qualities span.
+
+## pysam: your first BAM, written and read in the browser
+
+```{pyodide}
+#| label: pysam
+import pysam
+
+sam_text = ("@HD\tVN:1.6\tSO:coordinate\n"
+            "@SQ\tSN:chr1\tLN:1000\n"
+            "r1\t0\tchr1\t100\t60\t4M\t*\t0\t0\tATGC\tIIII\n"
+            "r2\t0\tchr1\t300\t60\t4M\t*\t0\t0\tGGCC\tIIII\n"
+            "r3\t16\tchr1\t500\t60\t4M\t*\t0\t0\tTTAA\tIIII\n")
+
+# SAM -> BAM (the lesson's VFS is writable!)
+with open("reads.sam", "w") as f:
+    f.write(sam_text)
+with pysam.AlignmentFile("reads.sam", "r") as fin, \
+     pysam.AlignmentFile("reads.bam", "wb", header=fin.header) as fout:
+    for read in fin:
+        fout.write(read)
+
+with pysam.AlignmentFile("reads.bam", "rb") as bam:
+    for r in bam:
+        print(f"{r.query_name}  pos={r.reference_start + 1}  "
+              f"reverse={r.is_reverse}  mapQ={r.mapping_quality}")
+```
+
+The SAM flags decode into properties: `16` = reverse-strand alignment
+(`is_reverse`), 4 = unmapped (`is_unmapped`), 2 = proper pair. Now index it
+and **fetch by region** — the operation that makes BAM essential (random
+access to a 100 GB file in milliseconds):
+
+```{pyodide}
+#| label: pysam-fetch
+import pysam
+
+pysam.index("reads.bam")                       # writes reads.bam.bai
+with pysam.AlignmentFile("reads.bam", "rb") as bam:
+    region = list(bam.fetch("chr1", 99, 200))  # 0-based half-open!
+    print("chr1:100-200 ->", [r.query_name for r in region])
+```
+
+::: {.callout-important}
+## Coordinate systems (source of ~all region-fetch bugs)
+BAM internals and pysam `fetch()` are **0-based, half-open** `[start, end)`.
+SAM text, most genomes browsers, and human conversation are **1-based,
+inclusive**. `r1` sits at SAM position 100 = pysam `reference_start` 99;
+fetching `chr1:100-200` in pysam is `(99, 200)`. Write it on a sticky note.
+:::
+
+## The GenomicRanges mental model (R, conceptual + local)
+
+Ranges libraries (GenomicRanges/IRanges, pyranges in Python) store
+**intervals, not sequences**: `(chrom, start, end, strand)` with *vectorized*
+algebra — `findOverlaps()`, `reduce()`, `width()`, `coverage()`. The mindset
+shift from positions-to-loops is "one vector of ranges, one verb" — Pattern 1
+again, for coordinates. There's a runnable local script in
+`scripts/granges_demo.R` for after class (Bioconductor doesn't compile to
+WebAssembly — the one thing this day can't do live).
+
+## Drills (live pad)
+
+```{pyodide}
+#| label: drills
+from Bio.Seq import Seq
+
+# 1. Translate "ATGGCC" and "CCAGGC" — same protein? which frame(s)?
+
+# 2. rev-comp of a palindrome: "GAATTC" — predict before running
+
+# 3. GC of "ACGT" repeated 10 times — exact value, then code it
+
+# 4. Count 4-mers of the Day 3 transcript — how many distinct? (n-k+1 total)
+
+# 5. orfs("ATGGGCTAA", min_nt=9) — predict, then run
+
+# 6. In pysam terms: SAM position 1,000,000 is reference_start = ?
+```
+
+::: {.callout-tip collapse="true"}
+## Expected answers
+1. Both → "MA" — same reading frame, different window; translation starts
+   at the sequence's own frame, there's no magic
+2. "GAATTC" — palindromic (EcoRI site!): rev-comp equals itself
+3. 50.0 — ACGT has 2 of 4 GC; repetition doesn't change composition
+4. 39 − 4 + 1 = 36 windows; distinct depends on sequence (here 30)
+5. `[(1, 0, 9)]` — ATG→TAA is 9 nt, passes min_nt=9
+6. `999_999` — 1-based SAM − 1 = 0-based start
+:::
+
+## Exercises
+
+### Exercise 1 — a Tm calculator class
+
+Minimum-GC oligonucleotide Tm estimate: `2°C × (A+T) + 4°C × (G+C)`.
+Wrap it as a class with a `tm` property (W3D1 style).
+
+```{pyodide}
+#| exercise: ex-w4d3-tm
+class Oligo:
+    def __init__(self, seq: str):
+        self.seq = seq.upper()
+
+    @property
+    def tm(self) -> float:
+        ______
+
+o = Oligo("ACGTACGT")
+print(o.tm)     # 2*4 + 4*4 = 24
+```
+
+::: {.hint exercise="ex-w4d3-tm"}
+`return 2 * sum(b in "AT" for b in self.seq) + 4 * sum(b in "GC" for b in self.seq)`
+:::
+
+::: {.solution exercise="ex-w4d3-tm"}
+```python
+class Oligo:
+    def __init__(self, seq: str):
+        self.seq = seq.upper()
+
+    @property
+    def tm(self) -> float:
+        at = sum(b in "AT" for b in self.seq)
+        gc = sum(b in "GC" for b in self.seq)
+        return 2 * at + 4 * gc
+```
+:::
+
+### Exercise 2 — the FASTQ QC pass
+
+Filter reads: keep if mean Q ≥ 25 AND length ≥ 6. Report kept/total and the
+mean length of kept reads.
+
+```{pyodide}
+#| exercise: ex-w4d3-qc
+import io
+import numpy as np
+from Bio import SeqIO
+
+fastq = ("@r1\nATGGCCATT\n+\nIIIIIIIII\n"
+         "@r2\nGGCCTTAA\n+\nIIIII###\n"
+         "@r3\nGC\n+\nII\n")
+recs = list(SeqIO.parse(io.StringIO(fastq), "fastq"))
+
+kept = ______
+
+print(f"kept {len(kept)} / {len(recs)}")
+```
+
+::: {.hint exercise="ex-w4d3-qc"}
+Two conditions on `letter_annotations["phred_quality"]` and
+`len(rec.seq)`; r1 passes, r2 fails mean-Q, r3 fails length.
+:::
+
+::: {.solution exercise="ex-w4d3-qc"}
+```python
+kept = [r for r in recs
+        if np.mean(r.letter_annotations["phred_quality"]) >= 25
+        and len(r.seq) >= 6]
+# kept = [r1] — r2's ### tail drags mean Q below 25, r3 is too short
+```
+:::
+
+### Exercise 3 — codon usage table
+
+Count codon frequencies across all 3 frames of the Day 3 transcript —
+which codon appears most? (This is a real metric: codon usage bias.)
+
+```{pyodide}
+#| exercise: ex-w4d3-codons
+from collections import Counter
+
+seq = "ATGGCCATTGTAATGGGCCGCTGAAAGGGTGCCCGATAG"
+codons = Counter(
+    ______
+)
+print(codons.most_common(3))
+```
+
+::: {.hint exercise="ex-w4d3-codons"}
+One frame: `seq[i:i+3] for i in range(0, len(seq) - 2, 3)`. All frames:
+loop start offset 0/1/2.
+:::
+
+::: {.solution exercise="ex-w4d3-codons"}
+```python
+codons = Counter(
+    seq[i:i+3]
+    for off in range(3)
+    for i in range(off, len(seq) - 2, 3)
+)
+# [('GCC', 3), ('ATG', 2), ('GGG', 2)] — GCC (Ala) wins
+```
+:::
+
+### Exercise 4 — BAM strand census
+
+Using the lesson's `reads.bam`: count how many reads map to each strand,
+and list the names of reverse-strand reads.
+
+```{pyodide}
+#| exercise: ex-w4d3-bam
+import pysam
+
+with pysam.AlignmentFile("reads.bam", "rb") as bam:
+    ______
+```
+
+::: {.hint exercise="ex-w4d3-bam"}
+Iterate reads; `r.is_reverse`; collect names into a list when True.
+:::
+
+::: {.solution exercise="ex-w4d3-bam"}
+```python
+with pysam.AlignmentFile("reads.bam", "rb") as bam:
+    reads = list(bam)
+    fwd = [r.query_name for r in reads if not r.is_reverse]
+    rev = [r.query_name for r in reads if r.is_reverse]
+    print(f"+ {len(fwd)}: {fwd}   - {len(rev)}: {rev}")
+# + 2: ['r1', 'r2']   - 1: ['r3']
+```
+:::
+
+### Exercise 5 — k-mer signature distance (ties the week together)
+
+Two sequences, k-mer profiles (P3's `kmer_counts`), Euclidean distance on
+shared-kmer counts. This is a miniature sequence-signature classifier —
+the idea sourmash scales up.
+
+```{pyodide}
+#| exercise: ex-w4d3-kmerdist
+from collections import Counter
+import numpy as np
+
+def profile(seq: str, k: int = 2) -> dict[str, int]:
+    return dict(Counter(seq[i:i+k] for i in range(len(seq) - k + 1)))
+
+def kmer_distance(a: str, b: str, k: int = 2) -> float:
+    ______
+
+print(kmer_distance("ATGGCC", "ATGGCC"))   # 0.0
+print(kmer_distance("ATGGCC", "TTACGG"))
+```
+
+::: {.hint exercise="ex-w4d3-kmerdist"}
+Build both profiles; take the union of keys; sum `(a.get(k,0) - b.get(k,0))**2`;
+return `sqrt`.
+:::
+
+::: {.solution exercise="ex-w4d3-kmerdist"}
+```python
+def kmer_distance(a, b, k=2):
+    pa, pb = profile(a, k), profile(b, k)
+    keys = set(pa) | set(pb)
+    return float(np.sqrt(sum((pa.get(kmer, 0) - pb.get(kmer, 0))**2
+                             for kmer in keys)))
+```
+:::
+
+## Common pitfalls (real ones)
+
+::: {.callout-warning}
+## 1. 0-based vs 1-based coordinates
+`fetch()` half-open 0-based; SAM/ground conversation 1-based inclusive.
+Every pipeline has this bug once — the sticky note is cheaper.
+:::
+
+::: {.callout-warning}
+## 2. Phred encodings pre-Illumina-1.8
+Same characters, different Q values (Phred+64). If QC thresholds behave
+weirdly on old data, check the encoding before the library.
+:::
+
+::: {.callout-warning}
+## 3. Translation stops at the first stop (by default)
+Biopython's `.translate()` returns `*` inside the protein but toffee-nosed
+tools differ: some cut at the first stop, some (with `cds=True`) require
+no internal stops. Know which contract your downstream tool expects.
+:::
+
+## Self-quiz — predict the output
+
+```{pyodide}
+#| label: quiz
+# Q1: len of the rev-comp of a 39-nt sequence?
+# Q2: Seq("atgc").translate() — does case matter? (run it!)
+# Q3: Q30 = what error rate?
+# Q4: pysam: fetch("chr1", 0, 100) covers SAM positions ...?
+# Q5: k-mers: 200-nt read, k=31 — how many windows?
+```
+
+::: {.callout-tip collapse="true"}
+## Quiz answers
+1. 39 — rev-comp preserves length (complement then reverse)
+2. It errors or returns empty-translation for lowercase — Biopython expects
+   uppercase; always `.upper()` input sequences (you saw `.upper()` in
+   every production snippet)
+3. 0.1% (Q = −10·log10 p)
+4. SAM 1–100 (0-based half-open shifted up by one)
+5. 200 − 31 + 1 = 170
+:::
+
+## Wrap-up checklist
+
+- [ ] Seq objects: translate, reverse_complement, and internal stops
+- [ ] FASTQ = records + Phred; QC = mean-Q/length filters with explicit thresholds
+- [ ] ORF scanning is frame- and stop-aware — naive ATG-to-end is wrong
+- [ ] pysam: write/read BAM, index, fetch by region; 0-based half-open
+- [ ] Ranges libraries = vectorized interval algebra (local R script for practice)
+- [ ] I scored 5/5 on the self-quiz
+
+**Tomorrow:** Algorithm Gym #4 — graphs and the Viterbi algorithm from scratch.

@@ -1,0 +1,447 @@
+---
+title: "Day 4 — Algorithm Gym #4: Graphs + Viterbi From Scratch"
+subtitle: "Week 4 · BFS/DFS, topological sort, and the HMM workhorse in two dialects"
+---
+
+::: {.callout-note}
+## Gym rules, final week edition
+
+Two related ideas today: **graphs** (things connected to things) and
+**dynamic programming over a sequence** (the Viterbi algorithm). The second
+is Week 5's single-cell/HMM material at full power — today you build it from
+scratch so nothing about it is magic.
+:::
+
+## Graphs: the only vocabulary you need
+
+A graph = **nodes** + **edges**. In code: an adjacency *dict* (R: named
+list) mapping each node to its neighbors. Directed vs undirected decides
+whether edges are one-way. The two traversals:
+
+- **BFS** (queue, FIFO): explores in rings — gives *shortest paths* in
+  unweighted graphs
+- **DFS** (stack/recursion): explores deep first — gives topological order,
+  cycle detection, component structure
+
+## Problem 1 — BFS with shortest paths
+
+```{pyodide}
+#| label: bfs-py
+from collections import deque
+
+graph = {
+    "A": ["B", "C"], "B": ["D"], "C": ["D", "E"],
+    "D": ["F"], "E": ["F"], "F": [],
+}
+
+def bfs(g, start):
+    seen, order, q = {start}, [], deque([start])
+    while q:
+        v = q.popleft()
+        order.append(v)
+        for n in g.get(v, []):
+            if n not in seen:
+                seen.add(n)
+                q.append(n)
+    return order
+
+def shortest_path(g, start, goal):
+    q = deque([[start]])
+    seen = {start}
+    while q:
+        path = q.popleft()
+        if path[-1] == goal:
+            return path
+        for n in g.get(path[-1], []):
+            if n not in seen:
+                seen.add(n)
+                q.append(path + [n])
+    return None
+
+print(bfs(graph, "A"))
+print(shortest_path(graph, "A", "F"))
+```
+
+```{webr}
+#| label: bfs-r
+graph <- list(A = c("B", "C"), B = "D", C = c("D", "E"),
+              D = "F", E = "F", F = character(0))
+
+bfs <- function(g, start) {
+  seen <- start; q <- start; order <- character(0)
+  while (length(q)) {
+    v <- q[1]; q <- q[-1]              # pop from the FRONT = queue
+    if (v %in% order) next
+    order <- c(order, v)
+    for (n in g[[v]]) if (!n %in% seen) { seen <- c(seen, n); q <- c(q, n) }
+  }
+  order
+}
+
+bfs(graph, "A")
+```
+
+The seen-set is not optional: without it, cycles loop forever. `deque` vs
+`list`-popping decides BFS from DFS — in Python `list.pop(0)` is O(n)
+(don't); in R `q[-1]` copies but at graph scale is fine.
+
+## networkx: the same graph, library-grade
+
+```{pyodide}
+#| label: networkx
+import networkx as nx
+
+g = nx.DiGraph(graph)     # DiGraph = directed; Graph = undirected
+print(list(nx.topological_sort(g)))       # dependencies before dependents
+print(nx.shortest_path(g, "A", "F"))
+print(sorted(nx.ancestors(g, "F")))       # everything F depends on
+print(nx.is_directed_acyclic_graph(g))    # DAG check — topological sort needs it
+```
+
+`topological_sort` is Kahn's algorithm: repeatedly take a node with no
+remaining incoming edges. Uses: pipeline ordering (this course's dependency
+graph!), module loading order, gene-regulatory hierarchies. It fails on
+cycles — which is exactly what makes it a **build validator**: if your
+analysis DAG has a cycle, topo-sort is where you find out.
+
+## Problem 2 — HMMs and the CpG-island question
+
+> A genome has **islands** where C and G are frequent, and **dispersed**
+> background elsewhere. Given only the sequence, reconstruct which bases
+> were island. Two hidden states, emissions we can see, transitions we
+> can't — a Hidden Markov Model.
+
+The model (calibrated so the answer below is learnable):
+
+```{pyodide}
+#| label: hmm-model
+import numpy as np
+
+states = ["D", "I"]                       # Dispersed / Island
+trans = {"D": {"D": np.log(0.9),  "I": np.log(0.1)},
+         "I": {"D": np.log(0.1),  "I": np.log(0.9)}}
+emit  = {"D": {b: np.log(0.25) for b in "ACGT"},          # background: uniform
+         "I": {"A": np.log(0.1),  "C": np.log(0.4),
+               "G": np.log(0.4),  "T": np.log(0.1)}}      # islands: GC-rich
+
+print("log-odds of C in island vs background:",
+      round(emit["I"]["C"] - emit["D"]["C"], 3))
+```
+
+Why **log space**: multiplying 100 probabilities underflows double
+precision (~1e-300 territory); summing logs never does. This is not an
+optimization — it's how every HMM implementation you will ever touch works.
+
+## Viterbi: the most-probable path, dynamic-programmed
+
+The recursion, in plain words: *best score for ending in state s at base i =
+emission of base i in s + the best of (previous score + transition).* Fill a
+table left to right, remember which state won each cell, walk back.
+
+```{pyodide}
+#| label: viterbi-py
+def viterbi(seq: str) -> str:
+    n = len(seq)
+    V = {s: [float("-inf")] * n for s in states}
+    back = {s: [None] * n for s in states}
+
+    for s in states:                                   # initialize
+        V[s][0] = np.log(0.5) + emit[s][seq[0]]
+
+    for i in range(1, n):                              # fill
+        for s in states:
+            best_prev, best_score = None, float("-inf")
+            for p in states:
+                score = V[p][i-1] + trans[p][s]
+                if score > best_score:
+                    best_prev, best_score = p, score
+            V[s][i] = best_score + emit[s][seq[i]]
+            back[s][i] = best_prev
+
+    path = [max(states, key=lambda s: V[s][n-1])]      # traceback
+    for i in range(n - 1, 0, -1):
+        path.append(back[path[-1]][i])
+    return "".join(reversed(path))
+
+seq = "CGCGCG" + "ATATATATAT" + "CGCGCG"
+path = viterbi(seq)
+print("seq: ", seq)
+print("path:", path)
+```
+
+```{webr}
+#| label: viterbi-r
+states <- c("D", "I")
+trans <- matrix(log(c(0.9, 0.1, 0.1, 0.9)), 2, 2, byrow = TRUE,
+                dimnames = list(states, states))       # row = from, col = to
+emit <- matrix(log(c(0.25, 0.25, 0.25, 0.25,
+                     0.1, 0.4, 0.4, 0.1)), 2, 4, byrow = TRUE,
+               dimnames = list(states, strsplit("ACGT", "")[[1]]))
+
+viterbi <- function(seq) {
+  n <- nchar(seq); chars <- strsplit(seq, "")[[1]]
+  V <- matrix(NA_real_, 2, n, dimnames = list(states, NULL))
+  back <- matrix(NA_integer_, 2, n, dimnames = list(states, NULL))
+  V[, 1] <- log(0.5) + emit[, chars[1]]
+  for (i in 2:n) {
+    for (s in 1:2) {
+      scores <- V[, i - 1] + trans[, s]      # vectorized over prev states!
+      b <- which.max(scores)
+      back[s, i] <- b
+      V[s, i] <- scores[b] + emit[s, chars[i]]
+    }
+  }
+  path <- integer(n); path[n] <- which.max(V[, n])
+  for (i in n:2) path[i - 1] <- back[path[i], i]
+  paste(states[path], collapse = "")
+}
+
+viterbi("CGCGCGATATATATATCGCGCG")
+```
+
+**Both implementations recover the planted structure exactly**:
+`IIIIII DDDDDDDDDD IIIIII`. Same table, same traceback — R's inner loop
+vectorizes over previous states (`V[, i-1] + trans[, s]`), Python's index
+loop is explicit. Twenty-five lines each; this is genuinely the algorithm
+from the 1980s papers, and Week 5 scales it (forward/backward, Baum-Welch
+training, gene finders) on the same skeleton.
+
+## Drills (live pad)
+
+```{pyodide}
+#| label: drills
+# 1. bfs on a graph where F also points to A — why does the seen-set save us?
+
+# 2. shortest_path(graph, "A", "E") — predict the path
+
+# 3. nx.is_directed_acyclic_graph on a graph with a cycle — build it and run
+
+# 4. Viterbi on "CCCCCCC" — all island? predict, then run
+
+# 5. Viterbi on "ATATAT" — all dispersed? (borderline: check!)
+
+# 6. What breaks if you run Viterbi in probability space on 500 bases?
+#    (comment: underflow — the log-space reason)
+
+# 7. topo sort a graph with TWO valid orders — which does Kahn's pick and why?
+```
+
+::: {.callout-tip collapse="true"}
+## Expected answers
+1. without `seen`, A→B→…→A loops forever — the set converts a cyclic graph
+   into a finite walk
+2. `["A", "C", "E"]` — 2 hops beats A→B→D→F-length routes
+3. `nx.DiGraph({"A": ["B"], "B": ["A"]})` → False → topological_sort raises
+4. `I` everywhere — 7 CpG bases strongly favor island
+5. Likely all `D` — AT bases penalize island (0.05 vs 0.25 emission) — but
+   the *first* base starts 50/50; check where the boundary lands
+6. products of ~100 probabilities hit ~1e-200 → denormals → zeros; logs turn
+   products into sums
+7. Kahn's picks by its ready-queue order (here: alphabetical-ish insertion);
+   topological order is rarely unique — ties broken by data structure
+:::
+
+## Exercises
+
+### Exercise 1 — connected components
+
+Count the connected components of an undirected graph (as adjacency dict
+with edges listed both ways). BFS from every unvisited node.
+
+```{pyodide}
+#| exercise: ex-w4d4-components
+def count_components(g: dict) -> int:
+    ______
+
+g = {"A": ["B"], "B": ["A"], "C": ["D"], "D": ["C"], "E": []}
+print(count_components(g))    # 3
+```
+
+::: {.hint exercise="ex-w4d4-components"}
+Keep a global `seen`; for each node not seen, BFS from it and mark
+everything reachable; count the BFS launches.
+:::
+
+::: {.solution exercise="ex-w4d4-components"}
+```python
+def count_components(g):
+    seen, count = set(), 0
+    for start in g:
+        if start in seen:
+            continue
+        count += 1
+        q = deque([start]); seen.add(start)
+        while q:
+            v = q.popleft()
+            for n in g.get(v, []):
+                if n not in seen:
+                    seen.add(n); q.append(n)
+    return count
+```
+:::
+
+### Exercise 2 — decode a longer sequence
+
+Generate a hidden path of length 300 (10 islands of random CpG runs in
+background), emit from it, and check Viterbi's accuracy. You need ~75%
+CpG-runs for the parameters above to work well — report the match rate.
+
+```{pyodide}
+#| exercise: ex-w4d4-decode
+import numpy as np
+
+rng = np.random.default_rng(42)
+
+def simulate(length=300, n_islands=10, island_len=15):
+    states = np.zeros(length, dtype=int)          # 0=D, 1=I
+    islands = rng.choice(np.arange(10, length - 30), n_islands, replace=False)
+    for s in islands:
+        states[s:s + island_len] = 1
+    seq = "".join(
+        rng.choice(list("CG"), p=[0.5, 0.5]) if st
+        else rng.choice(list("ACGT"), p=[0.25, 0.25, 0.25, 0.25])
+        for st in states)
+    return states, seq
+
+truth, seq = simulate()
+pred = np.array([1 if c == "I" else 0 for c in viterbi(seq)])
+print(f"viterbi accuracy: {(pred == truth).mean():.2f}")
+```
+
+::: {.hint exercise="ex-w4d4-decode"}
+The simulate() above is given; your job is just the accuracy line —
+`(pred == truth).mean()` — plus interpreting it (>0.85 typical with 15-base
+islands).
+:::
+
+::: {.solution exercise="ex-w4d4-decode"}
+```python
+print(f"viterbi accuracy: {(pred == truth).mean():.2f}")
+# Expect ~0.85-0.97: boundaries blur by a base or two (the emission window
+# is weak), but islands are found. That's HMM decoding in real life.
+```
+:::
+
+### Exercise 3 — R twin of the component count
+
+```{webr}
+#| exercise: ex-w4d4-components-r
+count_components <- function(g) {
+  ______
+}
+
+g <- list(A = c("B"), B = c("A"), C = c("D"), D = c("C"), E = character(0))
+count_components(g)     # 3
+```
+
+::: {.hint exercise="ex-w4d4-components-r"}
+Same skeleton as Python: loop names(g), skip seen, BFS (the bfs() function
+from this page) collecting into seen.
+:::
+
+::: {.solution exercise="ex-w4d4-components-r"}
+```r
+count_components <- function(g) {
+  seen <- character(0); count <- 0
+  for (start in names(g)) {
+    if (start %in% seen) next
+    count <- count + 1
+    reached <- bfs(g, start)
+    seen <- c(seen, reached)
+  }
+  count
+}
+```
+:::
+
+### Exercise 4 — forward algorithm teaser
+
+Viterbi finds the single best path. The **forward algorithm** sums over ALL
+paths (giving P(sequence)). Same table, replace `max` with `logsumexp` —
+compute the total log-probability of "CG" under the model.
+
+```{pyodide}
+#| exercise: ex-w4d4-forward
+def forward_logprob(seq: str) -> float:
+    ______
+
+print(round(forward_logprob("CG"), 4))
+```
+
+::: {.hint exercise="ex-w4d4-forward"}
+Initialize both states as Viterbi; in the fill step replace the max with
+`np.logaddexp.reduce(scores)` (log-space sum); end with
+`logaddexp` of the two final cells.
+:::
+
+::: {.solution exercise="ex-w4d4-forward"}
+```python
+def forward_logprob(seq):
+    n = len(seq)
+    V = {s: [float("-inf")] * n for s in states}
+    for s in states:
+        V[s][0] = np.log(0.5) + emit[s][seq[0]]
+    for i in range(1, n):
+        for s in states:
+            V[s][i] = np.logaddexp.reduce(
+                [V[p][i-1] + trans[p][s] for p in states]) + emit[s][seq[i]]
+    return float(np.logaddexp(V["D"][n-1], V["I"][n-1]))
+# ~-2.8: "CG" is likely under the model (CpG!), vs ~-3.9 for "AT"
+```
+:::
+
+## Common pitfalls (real ones)
+
+::: {.callout-warning}
+## 1. BFS without a seen-set
+Loops forever on any cycle. Related R trap: `v %in% order` guard in my bfs()
+exists precisely because R lists allow revisits before ordering.
+:::
+
+::: {.callout-warning}
+## 2. Topological sort on a cyclic graph
+`nx.topological_sort` raises `NetworkXUnfeasible` — treat that exception as
+a *feature* (cycle detector). A hand-rolled Kahn's that ignores leftover
+nodes silently returns a partial order.
+:::
+
+::: {.callout-warning}
+## 3. Viterbi in probability space
+The underflow story. Related: forgetting log(start probability), or
+swapping the transition matrix orientation (R: rows are `from`) — both give
+confidently wrong paths with no error.
+:::
+
+## Self-quiz — predict the output
+
+```{pyodide}
+#| label: quiz
+# Q1: BFS guarantees shortest paths under what condition?
+# Q2: what does topological_sort raise on a cycle (library behavior)?
+# Q3: Viterbi traceback direction: forward or backward in time?
+# Q4: why are emissions row-per-state in the R matrix (rows = from-state)?
+# Q5: your Viterbi returns all-D on GC-rich input — first suspect?
+```
+
+::: {.callout-tip collapse="true"}
+## Quiz answers
+1. Unweighted edges (or all weight 1) — BFS explores in ring order
+2. `NetworkXUnfeasible` — catch it and you have a free cycle validator
+3. Backward — fill left→right, then follow back-pointers from the best
+   final state to the start
+4. `trans[from, to]` must align with `V[from, i-1]` — orientation bugs are
+   silent; the dimnames are your contract
+5. The emission contrast / switch probabilities — underpowered models
+   collapse to one state (today's calibration exercise, twice)
+:::
+
+## Wrap-up checklist
+
+- [ ] BFS = queue + seen-set = shortest paths; DFS = stack = order/component tasks
+- [ ] Topological sort orders DAGs and validates them
+- [ ] Viterbi = DP table + traceback, in log space, always
+- [ ] R matrix orientation (`trans[from, to]`) is a silent failure mode
+- [ ] I scored 5/5 on the self-quiz
+
+**Tomorrow:** bulk RNA-seq with real DESeq2/edgeR outputs, and Project 4 —
+your classifier meets the DE analysis.

@@ -1,0 +1,372 @@
+---
+title: "Day 1 — ML Foundations: Splits, CV, Pipelines"
+subtitle: "Week 4 · tidymodels workflows ↔ sklearn Pipelines, and the no-leakage rules"
+resources:
+  - data/p4/expr.csv
+  - data/p4/labels.csv
+---
+
+## Cheat sheet (90 seconds)
+
+| Task | R (tidymodels) | Python (sklearn) |
+|---|---|---|
+| holdout split | `initial_split(prop = 0.75, strata = y)` | `train_test_split(stratify=y, random_state=42)` |
+| get the parts | `training(split)`, `testing(split)` | tuples from the call |
+| k-fold CV | `vfold_cv(train, v = 5, strata = y)` | `KFold`/`cross_val_score(cv=5)` |
+| preprocessing | `recipe(y ~ .) |> step_normalize(all_numeric_predictors())` | `Pipeline([("scale", StandardScaler())])` |
+| model spec | `logistic_reg() |> set_engine("glm")` | `LogisticRegression()` |
+| bundle | `workflow() |> add_recipe() |> add_model()` | `Pipeline([...])` |
+| fit | `fit(data = train)` | `pipe.fit(X_train, y_train)` |
+| predict | `predict(fit, new_data = test)` | `pipe.predict(X_test)` |
+| seed | seeds in split/CV calls + engine | `random_state=` everywhere |
+
+::: {.callout-warning}
+## First loads are slow
+The R cells load parsnip/rsample/recipes/yards­tick (not the whole
+tidymodels metapackage) and Python loads scikit-learn — allow ~30–60 s the
+first time per session; cached after.
+:::
+
+## The one rule that outranks everything
+
+> **Nothing about the test set may influence anything fitted.** Not the
+> scaler's means, not the model's hyperparameters, not your choice of model.
+
+Why pipelines exist: scaling "the data" *before* splitting leaks test-set
+statistics into training (your scaler saw the test mean). The fix is
+mechanical: preprocessing steps live **inside** the pipeline, fitted on
+train folds only, *applied* to test. Both ecosystems enforce this the same
+way — learn it once, twice.
+
+## Load the study data (both dialects)
+
+`data/p4/` is mounted into the browser's filesystem for these cells.
+
+```{webr}
+#| label: load-r
+expr <- read.csv("data/p4/expr.csv", row.names = 1, check.names = FALSE)
+labels <- read.csv("data/p4/labels.csv")
+dim(expr); table(labels$condition)
+```
+
+```{pyodide}
+#| label: load-py
+import pandas as pd
+
+expr = pd.read_csv("data/p4/expr.csv", index_col=0)     # genes x samples
+labels = pd.read_csv("data/p4/labels.csv")
+print(expr.shape)
+print(labels["condition"].value_counts())
+```
+
+60 samples, 200 genes, 30/30 classes. ML wants samples as **rows**: we'll
+transpose (`t()` / `.T`).
+
+## The holdout split — sacred and seeded
+
+```{webr}
+#| label: split-r
+library(rsample)
+
+X <- t(expr)                                # samples as rows
+dat <- cbind(as.data.frame(X), condition = factor(labels$condition))
+
+set.seed(42)
+split <- initial_split(dat, prop = 0.75, strata = condition)
+train <- training(split); test <- testing(split)
+
+table(train$condition); table(test$condition)
+```
+
+```{pyodide}
+#| label: split-py
+from sklearn.model_selection import train_test_split
+
+Xt = expr.T                                 # samples as rows
+y = labels.set_index("sample_id").loc[Xt.index, "condition"]
+
+X_train, X_test, y_train, y_test = train_test_split(
+    Xt, y, test_size=0.25, stratify=y, random_state=42)
+
+print(y_train.value_counts().to_dict(), y_test.value_counts().to_dict())
+```
+
+`strata`/`stratify` keeps the 30/30 class balance in both parts — with 45/15
+splits, an unstratified draw can easily land 25/5, and every metric you
+compute afterwards is noise.
+
+## The pipeline: preprocessing INSIDE the workflow
+
+```{webr}
+#| label: workflow-r
+library(rsample); library(parsnip); library(recipes); library(workflows)
+
+set.seed(42)
+lr_wf <- workflow() |>
+  add_recipe(
+    recipe(condition ~ ., data = train) |>
+      step_normalize(all_numeric_predictors()) |>
+      step_pca(all_numeric_predictors(), num_comp = 5)
+  ) |>
+  add_model(logistic_reg() |> set_engine("glm"))
+
+lr_fit <- fit(lr_wf, data = train)
+lr_fit
+```
+
+```{pyodide}
+#| label: workflow-py
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import StandardScaler
+from sklearn.decomposition import PCA
+from sklearn.linear_model import LogisticRegression
+
+pipe = Pipeline([
+    ("scale", StandardScaler()),
+    ("pca", PCA(n_components=5)),
+    ("model", LogisticRegression(max_iter=1000, random_state=42)),
+])
+
+pipe.fit(X_train, y_train)
+print(f"train acc: {pipe.score(X_train, y_train):.2f}")
+print(f"test  acc: {pipe.score(X_test, y_test):.2f}")
+```
+
+Same shape in both: **steps → model, bundled, fitted on train only.** The
+scaler/PCA learned from training data are *applied* unchanged to test —
+exactly the discipline that prevents leakage, enforced by construction.
+
+## Cross-validation: honest estimates without wasting the test set
+
+```{webr}
+#| label: cv-r
+library(rsample); library(parsnip); library(recipes); library(workflows); library(yardstick)
+
+set.seed(42)
+folds <- vfold_cv(train, v = 5, strata = condition)
+
+cv_res <- fit_resamples(lr_wf, resamples = folds)
+collect_metrics(cv_res)
+```
+
+```{pyodide}
+#| label: cv-py
+from sklearn.model_selection import cross_val_score
+
+scores = cross_val_score(pipe, X_train, y_train, cv=5, scoring="accuracy")
+print("fold accuracies:", np.round(scores, 3))
+print(f"CV mean: {scores.mean():.3f} ± {scores.std():.3f}")
+```
+
+CV = five mini train/test splits *inside* the training data. The test set
+stays sealed. Report CV mean ± sd during development; touch the test set
+once, at the end.
+
+## The leakage demo (see it happen)
+
+```{pyodide}
+#| label: leakage
+from sklearn.preprocessing import StandardScaler
+
+# ❌ WRONG: scaler fitted on ALL data before the split
+scaler_wrong = StandardScaler().fit(Xt)          # sees test means!
+X_wrong = scaler_wrong.transform(Xt)
+Xtr_w, Xte_w, ytr_w, yte_w = train_test_split(
+    X_wrong, y, test_size=0.25, stratify=y, random_state=42)
+
+# ✅ RIGHT: scaling inside the pipeline (previous cell)
+from sklearn.linear_model import LogisticRegression
+wrong = Pipeline([("scale", StandardScaler()),
+                  ("m", LogisticRegression(max_iter=1000))]).fit(Xtr_w, ytr_w)
+
+print(f"leaky test acc: {wrong.score(Xte_w, yte_w):.3f}")
+print(f"clean test acc: {pipe.score(X_test, y_test):.3f}")
+```
+
+On today's easy data both print **0.933** — the leak has nothing to exploit.
+That's exactly why leakage is dangerous: it does nothing *until* the
+problem gets hard (more features, weaker signal, hyperparameter search),
+and then it inflates the leaky number precisely when you're most tempted
+to trust it. The discipline is non-negotiable because you can't see it
+working.
+
+## Drills (live pad)
+
+```{pyodide}
+#| label: drills
+# 1. What are the shapes? X_train.shape, X_test.shape — predict first
+
+# 2. Re-run the split with random_state=7 — same shapes, same members? (.head(3))
+
+# 3. cross_val_score with cv=10 — wider or narrower mean ± sd than cv=5?
+
+# 4. score=X_test,y_test on a pipeline fitted with wrong scaling — why still ok here?
+
+# 5. Pipeline without the scaler — logistic on raw counts — compare CV means
+
+# 6. stratify=y removed: what can the class balance look like? (run 5 seeds)
+```
+
+::: {.callout-tip collapse="true"}
+## Expected answers
+1. `(45, 200) (15, 200)` — 75/25 of 60
+2. Shapes identical; members differ — different seed = different split (both valid!)
+3. cv=10: mean similar, sd typically smaller (less fold-to-fold variance)
+4. "OK" only because we compare against ITS OWN transformed test copy — the
+   error is methodological (information leak), not a code crash
+5. Without scaling, logistic (max_iter=1000) may warn/converge slower; CV mean
+   usually a bit lower — genes are on very different count scales
+6. With 45 samples and no stratify, class counts drift (e.g. 27/18);
+   occasionally badly — that's why stratify is not optional at small n
+:::
+
+## Exercises
+
+### Exercise 1 — the seeded split, twice, verified
+
+Write `make_split(seed)` (Python) that returns train/test indices via
+train_test_split(stratify=y, random_state=seed) and asserts the split is
+identical for the same seed — the W3D3 determinism habit, ML edition.
+
+```{pyodide}
+#| exercise: ex-w4d1-split
+from sklearn.model_selection import train_test_split
+
+def make_split(seed):
+    ______
+
+i1 = make_split(42); i2 = make_split(42)
+print(i1[0].tolist() == i2[0].tolist())     # True
+```
+
+::: {.hint exercise="ex-w4d1-split"}
+Return `train_test_split(Xt.index, test_size=0.25, stratify=y,
+random_state=seed)` — index lists are directly comparable.
+:::
+
+::: {.solution exercise="ex-w4d1-split"}
+```python
+def make_split(seed):
+    return train_test_split(Xt.index, test_size=0.25,
+                            stratify=y, random_state=seed)
+```
+:::
+
+### Exercise 2 — swap the model inside the workflow
+
+Keep Day 1's R workflow and swap `logistic_reg()` for a random forest:
+`rand_forest(trees = 500) |> set_engine("ranger") |> set_mode("classification")`.
+Re-fit and compare CV accuracy. (First ranger load ~20 s.)
+
+```{webr}
+#| exercise: ex-w4d1-rf
+library(rsample); library(parsnip); library(recipes); library(workflows); library(yardstick)
+
+set.seed(42)
+rf_wf <- workflow() |>
+  add_recipe(recipe(condition ~ ., data = train) |>
+               step_normalize(all_numeric_predictors())) |>
+  add_model(rand_forest(trees = 500) |> set_engine("ranger"))
+
+# CV it, then report the accuracy metric:
+______
+```
+
+::: {.hint exercise="ex-w4d1-rf"}
+`fit_resamples(rf_wf, resamples = folds) |> collect_metrics()` — look at
+the `.metric == "accuracy"` row.
+:::
+
+::: {.solution exercise="ex-w4d1-rf"}
+```r
+set.seed(42)
+fit_resamples(rf_wf, resamples = folds) |> collect_metrics()
+# ~0.85-0.95 accuracy; forest > logistic here because the signal is
+# distributed across 25 genes with gene-to-gene noise — trees average it out
+```
+:::
+
+### Exercise 3 — the leakage autodetect
+
+Which of these four snippets leaks? (Answer as comments, no code needed.)
+
+```r
+# A) recipe prepared on train only, baked on test (via workflow)
+# B)  <- recipe() |> prep(full_data)   then  juice() both splits
+# C)  filter genes by p-value computed on ALL samples, then split
+# D)  impute missing values using train medians, applied to test
+```
+
+```{pyodide}
+#| exercise: ex-w4d1-leak
+# Your answer: which of A-D leak, and what leaks specifically?
+______
+```
+
+::: {.callout-tip collapse="true"}
+## Answers
+B and C leak. B prepped the recipe on everything (test means inside the
+scaler/imputer). C is the sneakiest and most common in genomics: feature
+selection on all samples uses test labels — the DE screen must happen
+*inside* CV folds or on train only. A and D are clean (that's the point of
+workflows/pipelines).
+:::
+
+## Common pitfalls (real ones)
+
+::: {.callout-warning}
+## 1. Fitting transformers on the full dataset
+The scaler that saw the test mean is a (mild) leak; the DE gene-filter that
+saw test labels is a (fatal) one. Rule: **every learned transform lives
+inside the pipeline.**
+:::
+
+::: {.callout-warning}
+## 2. Unseeded, unstratified splits
+`train_test_split(X, y)` without `random_state`+`stratify` gives a new,
+possibly imbalanced experiment every run — your notebook becomes
+unreproducible noise. Same for R: `set.seed()` immediately before
+`initial_split()`.
+:::
+
+::: {.callout-warning}
+## 3. Tuning on the test set
+Trying 8 models and reporting the best test score = the test set was your
+training set. Tune via CV; the test set gets exactly one use.
+:::
+
+## Self-quiz — predict the output
+
+```{pyodide}
+#| label: quiz
+# Q1: X_train.shape? (60 samples, 200 genes, 75% train, stratified)
+# Q2: what does Pipeline guarantee about the scaler at predict time?
+# Q3: cross_val_score(pipe, X_train, ...) — why X_train and not Xt?
+# Q4: R: which does NOT leak: juice(prep(rec, full)) vs
+#     bake(prep(rec, train), test)?
+# Q5: you report test acc 0.98 after trying 12 models — what's the problem?
+```
+
+::: {.callout-tip collapse="true"}
+## Quiz answers
+1. `(45, 200)`
+2. It re-applies the *training-fitted* scaler (train mean/sd) to test —
+   never re-fits
+3. CV re-splits its input; passing everything would use the test set inside
+   CV — the quiet leak
+4. The second. `prep(rec, full_data)` contaminates transforms with test
+   statistics; bake with train-fitted recipe is the clean direction
+5. Test-set tuning: the 0.98 estimates your *selection*, not the model.
+   Expected true performance is CV's number, not this
+:::
+
+## Wrap-up checklist
+
+- [ ] Sacred test set, seeded + stratified, touched once
+- [ ] Preprocessing inside workflow/Pipeline — always
+- [ ] CV during development; test score once at the end
+- [ ] `random_state=`/`set.seed()` on splits, folds, and estimators
+- [ ] I scored 5/5 on the self-quiz
+
+**Tomorrow:** classifiers in earnest — logistic vs forests vs boosting, and
+the metrics that actually matter.

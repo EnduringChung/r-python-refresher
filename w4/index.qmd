@@ -1,0 +1,33 @@
+---
+title: "Week 4 — Machine Learning + Bioinformatics I"
+subtitle: "tidymodels ↔ sklearn, evaluation, sequences, graphs & HMMs, bulk RNA-seq"
+---
+
+## The week at a glance
+
+| Day | Lesson | Superpower gained |
+|---|---|---|
+| 1 | [ML Foundations](day1-ml-foundations.qmd) | splits, CV, pipelines — leakage-proof model code in both dialects |
+| 2 | [Classifiers & Evaluation](day2-classifiers.qmd) | logistic/forest/boosting, ROC & PR, thresholds, imbalance |
+| 3 | [Sequences & Genomic Data](day3-sequences.qmd) | Biopython, FASTQ QC, k-mers, pysam/BAM — live in-browser |
+| 4 | [Algorithm Gym #4](day4-gym4.qmd) | BFS/DFS, topological sort, and Viterbi from scratch |
+| 5 | [Bulk RNA-seq + Project 4](day5-rnaseq-project4.qmd) | DESeq2/edgeR (frozen outputs) + your own classifier study |
+
+## The week's spine: one dataset, many tools
+
+`data/p4/` holds a synthetic bulk-expression study (`expr.csv`: 200 genes ×
+60 samples; `labels.csv`: normal/tumor) with a **planted 10-gene tumor
+signature**. You'll build pipelines on it (Day 1), classify it (Day 2),
+see which genes drive the prediction (Day 3 k-mers & Day 5 DE), and
+Project 4 asks the full question: *can a model find the biology — and can
+you prove it wasn't luck?* (W3D3's seeds + CV answer that.)
+
+## Ground rules for the week
+
+1. **The test set is sacred** — touch it once, at the end, with a seeded split
+2. **Preprocessing lives inside the pipeline** — never fit transformers on
+   the full dataset before splitting (leakage)
+3. **Every estimator gets `random_state=` / `set.seed()`** — W3D3 applies
+4. Metrics > accuracy: know what your classifier is *for* before judging it
+5. Frozen 🧊 cells (DESeq2/edgeR) show real outputs — run the matching
+   script in `scripts/rnaseq/` locally to reproduce
