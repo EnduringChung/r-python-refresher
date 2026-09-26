@@ -7,6 +7,31 @@ details > summary {
   cursor: pointer;
 }
 
+/* ---- iPad / narrow viewport: keep wide tables inside their column ----
+   Long inline code in table cells forced the body column to overflow
+   under the right-hand TOC. Scroll wide tables horizontally instead. */
+.main-content table,
+#quarto-content table {
+  display: block;
+  width: fit-content;
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+/* let inline code wrap instead of pushing cells wide */
+td code,
+th code,
+p code,
+li code {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+/* belt & suspenders: nothing may paint over the TOC column */
+#quarto-content main {
+  overflow-x: clip;
+}
+
 /* ---- Print / PDF export ---- */
 @media print {
   /* navigation chrome */
