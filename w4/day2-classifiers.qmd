@@ -198,6 +198,26 @@ For the logistic: sweep thresholds 0.1→0.9, print precision and recall of
 "tumor" at each. Identify the threshold that maximizes F1.
 
 ```{pyodide}
+#| setup: true
+#| exercise: ex-w4d2-thresh
+import numpy as np
+import pandas as pd
+from sklearn.model_selection import train_test_split
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import StandardScaler
+from sklearn.linear_model import LogisticRegression
+from sklearn.metrics import precision_score, recall_score, f1_score
+
+expr = pd.read_csv("data/p4/expr.csv", index_col=0)
+labels = pd.read_csv("data/p4/labels.csv")
+Xt, y = expr.T, labels.set_index("sample_id").loc[expr.T.index, "condition"]
+X_tr, X_te, y_tr, y_te = train_test_split(
+    Xt, y, test_size=0.25, stratify=y, random_state=42)
+pipe = Pipeline([("scale", StandardScaler()),
+                 ("m", LogisticRegression(max_iter=2000, random_state=42))]).fit(X_tr, y_tr)
+```
+
+```{pyodide}
 #| exercise: ex-w4d2-thresh
 from sklearn.metrics import precision_score, recall_score, f1_score
 
@@ -229,6 +249,33 @@ for t in [0.1, 0.3, 0.5, 0.7, 0.9]:
 Same subsample trick as the lesson (5% prevalence): compute accuracy,
 ROC-AUC, and average precision for the forest. Which number would mislead
 a reviewer who only reads accuracy?
+
+```{pyodide}
+#| setup: true
+#| exercise: ex-w4d2-imbalance
+import numpy as np
+import pandas as pd
+from sklearn.model_selection import train_test_split
+from sklearn.pipeline import Pipeline
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.metrics import accuracy_score, roc_auc_score, average_precision_score
+
+expr = pd.read_csv("data/p4/expr.csv", index_col=0)
+labels = pd.read_csv("data/p4/labels.csv")
+Xt, y = expr.T, labels.set_index("sample_id").loc[expr.T.index, "condition"]
+X_tr, X_te, y_tr, y_te = train_test_split(
+    Xt, y, test_size=0.25, stratify=y, random_state=42)
+forest = Pipeline([("m", RandomForestClassifier(n_estimators=500,
+                                                random_state=42))]).fit(X_tr, y_tr)
+rng = np.random.default_rng(42)
+tumor_idx = np.where(y_te == "tumor")[0]
+normal_idx = rng.choice(np.where(y_te == "normal")[0],
+                        size=int(len(tumor_idx) / 0.05 * 0.95), replace=True)
+subset = np.concatenate([tumor_idx, normal_idx])
+y_sub = (y_te.iloc[subset] == "tumor").astype(int)
+X_sub, p_sub_full = X_te.iloc[subset], forest.predict_proba(X_te)[:, list(forest.classes_).index("tumor")]
+p_sub = p_sub_full[subset]
+```
 
 ```{pyodide}
 #| exercise: ex-w4d2-imbalance
@@ -264,6 +311,26 @@ print(f"PR-AUC(AP): {average_precision_score(y_sub, p_sub):.3f}")  # the honest 
 Recreate the confusion matrix + accuracy in tidymodels: fit the logistic
 workflow from Day 1, `predict(test, type = "class")` and `augment`, then
 `conf_mat` + `accuracy` from yardstick.
+
+```{webr}
+#| setup: true
+#| exercise: ex-w4d2-r
+library(rsample); library(parsnip); library(recipes)
+library(workflows); library(yardstick)
+expr <- read.csv("data/p4/expr.csv", row.names = 1, check.names = FALSE)
+labels <- read.csv("data/p4/labels.csv")
+dat <- cbind(as.data.frame(t(expr)), condition = factor(labels$condition))
+set.seed(42)
+split <- initial_split(dat, prop = 0.75, strata = condition)
+train <- training(split); test <- testing(split)
+lr_wf <- workflow() |>
+  add_recipe(recipe(condition ~ ., data = train) |>
+               step_normalize(all_numeric_predictors()) |>
+               step_pca(all_numeric_predictors(), num_comp = 5)) |>
+  add_model(logistic_reg() |> set_engine("glm"))
+lr_fit <- fit(lr_wf, data = train)
+aug <- augment(lr_fit, test)
+```
 
 ```{webr}
 #| exercise: ex-w4d2-r

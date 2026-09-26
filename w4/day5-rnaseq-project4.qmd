@@ -209,6 +209,22 @@ Repeat the forest CV with 20, 40, 60 training samples (subsample with a
 seed). Plot or tabulate CV accuracy vs n. At what n does it stabilize?
 
 ```{pyodide}
+#| setup: true
+#| exercise: ex-w4d5-n
+import numpy as np
+import pandas as pd
+from sklearn.model_selection import cross_val_score
+from sklearn.ensemble import RandomForestClassifier
+
+expr = pd.read_csv("data/p4/expr.csv", index_col=0)
+labels = pd.read_csv("data/p4/labels.csv")
+X, y = expr.T, labels.set_index("sample_id").loc[expr.T.index, "condition"]
+from sklearn.model_selection import train_test_split
+X_tr, X_te, y_tr, y_te = train_test_split(
+    X, y, test_size=0.25, stratify=y, random_state=42)
+```
+
+```{pyodide}
 #| exercise: ex-w4d5-n
 from sklearn.model_selection import cross_val_score
 from sklearn.ensemble import RandomForestClassifier
@@ -244,6 +260,26 @@ for n in (20, 40, 60):
 The forest's top-12 important genes: how many are in the planted signature
 (`SIG001`..`SIG025`)? Name one background gene that made the list and argue
 (in a comment) why importance ≠ differential expression.
+
+```{pyodide}
+#| setup: true
+#| exercise: ex-w4d5-importance
+import numpy as np
+import pandas as pd
+from sklearn.model_selection import train_test_split
+from sklearn.pipeline import Pipeline
+from sklearn.ensemble import RandomForestClassifier
+
+expr = pd.read_csv("data/p4/expr.csv", index_col=0)
+labels = pd.read_csv("data/p4/labels.csv")
+X, y = expr.T, labels.set_index("sample_id").loc[expr.T.index, "condition"]
+X_tr, X_te, y_tr, y_te = train_test_split(
+    X, y, test_size=0.25, stratify=y, random_state=42)
+candidates = {
+    "forest": Pipeline([("m", RandomForestClassifier(n_estimators=500,
+                                                     random_state=42))]).fit(X_tr, y_tr),
+}
+```
 
 ```{pyodide}
 #| exercise: ex-w4d5-importance

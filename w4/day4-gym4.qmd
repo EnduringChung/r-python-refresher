@@ -287,6 +287,38 @@ background), emit from it, and check Viterbi's accuracy. You need ~75%
 CpG-runs for the parameters above to work well — report the match rate.
 
 ```{pyodide}
+#| setup: true
+#| exercise: ex-w4d4-decode
+import numpy as np
+states = ["D", "I"]
+trans = {"D": {"D": np.log(0.9), "I": np.log(0.1)},
+         "I": {"D": np.log(0.1), "I": np.log(0.9)}}
+emit = {"D": {b: np.log(0.25) for b in "ACGT"},
+        "I": {"A": np.log(0.1), "C": np.log(0.4),
+              "G": np.log(0.4), "T": np.log(0.1)}}
+
+def viterbi(seq):
+    n = len(seq)
+    V = {s: [float("-inf")] * n for s in states}
+    back = {s: [None] * n for s in states}
+    for s in states:
+        V[s][0] = np.log(0.5) + emit[s][seq[0]]
+    for i in range(1, n):
+        for s in states:
+            best_prev, best_score = None, float("-inf")
+            for p in states:
+                score = V[p][i-1] + trans[p][s]
+                if score > best_score:
+                    best_prev, best_score = p, score
+            V[s][i] = best_score + emit[s][seq[i]]
+            back[s][i] = best_prev
+    path = [max(states, key=lambda s: V[s][n-1])]
+    for i in range(n - 1, 0, -1):
+        path.append(back[path[-1]][i])
+    return "".join(reversed(path))
+```
+
+```{pyodide}
 #| exercise: ex-w4d4-decode
 import numpy as np
 
@@ -359,6 +391,18 @@ count_components <- function(g) {
 Viterbi finds the single best path. The **forward algorithm** sums over ALL
 paths (giving P(sequence)). Same table, replace `max` with `logsumexp` —
 compute the total log-probability of "CG" under the model.
+
+```{pyodide}
+#| setup: true
+#| exercise: ex-w4d4-forward
+import numpy as np
+states = ["D", "I"]
+trans = {"D": {"D": np.log(0.9), "I": np.log(0.1)},
+         "I": {"D": np.log(0.1), "I": np.log(0.9)}}
+emit = {"D": {b: np.log(0.25) for b in "ACGT"},
+        "I": {"A": np.log(0.1), "C": np.log(0.4),
+              "G": np.log(0.4), "T": np.log(0.1)}}
+```
 
 ```{pyodide}
 #| exercise: ex-w4d4-forward

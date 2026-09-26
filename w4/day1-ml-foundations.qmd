@@ -259,6 +259,22 @@ Keep Day 1's R workflow and swap `logistic_reg()` for a random forest:
 Re-fit and compare CV accuracy. (First ranger load ~20 s.)
 
 ```{webr}
+#| setup: true
+#| exercise: ex-w4d1-rf
+# state for this exercise (runs before every evaluation)
+library(rsample); library(parsnip); library(recipes)
+library(workflows); library(yardstick)
+expr <- read.csv("data/p4/expr.csv", row.names = 1, check.names = FALSE)
+labels <- read.csv("data/p4/labels.csv")
+dat <- cbind(as.data.frame(t(expr)), condition = factor(labels$condition))
+set.seed(42)
+split <- initial_split(dat, prop = 0.75, strata = condition)
+train <- training(split); test <- testing(split)
+set.seed(42)
+folds <- vfold_cv(train, v = 5, strata = condition)
+```
+
+```{webr}
 #| exercise: ex-w4d1-rf
 library(rsample); library(parsnip); library(recipes); library(workflows); library(yardstick)
 
