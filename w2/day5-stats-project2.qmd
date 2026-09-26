@@ -171,6 +171,7 @@ summary(fit_r)
 
 ```{pyodide}
 #| label: anova-py
+# ⏳ first statsmodels load takes ~30s — that's normal, it's cached after
 import numpy as np, pandas as pd
 from statsmodels.formula.api import ols
 from statsmodels.stats.anova import anova_lm
