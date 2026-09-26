@@ -19,7 +19,7 @@ def test_case_insensitive():
 
 @pytest.mark.skip(reason="unskip when you implement rev_comp()")
 def test_handles_n():
-    assert rev_comp("ATGN") == "NAT"
+    assert rev_comp("ATGN") == "NCAT"
 
 
 @pytest.mark.skip(reason="unskip when you implement rev_comp()")

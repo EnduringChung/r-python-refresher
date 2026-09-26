@@ -1,0 +1,500 @@
+---
+title: "Day 2 — Architecture & Robust Code"
+subtitle: "Week 3 · modules, envs (renv/uv), exceptions, logging, type hints"
+---
+
+## Cheat sheet (90 seconds)
+
+| Task | Python | R |
+|---|---|---|
+| use a module | `import utils` / `from utils import f` | `source("utils.R")` / `library(pkg)` |
+| entry point guard | `if __name__ == "__main__":` | not needed (scripts just run) |
+| catch failure | `try: ... except ValueError as e:` | `tryCatch(..., error = function(e) ...)` |
+| raise/stop | `raise ValueError("msg")` | `stop("msg")` |
+| warn | `warnings.warn("msg")` | `warning("msg")` |
+| log (not print) | `logging.info(...)` | `message()`, `{logger}` pkg |
+| types | `def f(x: str, k: int = 3) -> bool:` | informal roxygen; `{optype}`/S7 |
+| lock env | `uv lock` / `requirements.txt` | `renv::snapshot()` |
+| restore env | `uv sync` / `pip install -r reqs.txt` | `renv::restore()` |
+
+## Why your scripts rot (and the structure that stops it)
+
+Symptoms of architecture debt: one 300-line script; functions and top-level
+code interleaved; `setwd("C:/holim/...")` in line 3; copying the script to
+tweak one parameter → now two scripts diverge. The cure is boring and
+mechanical:
+
+1. **Every nontrivial unit is a function** (W1D3 standard: guards, one job)
+2. **Functions live in modules** — files you can import/test, not just run
+3. **Scripts that run analyses are thin**: parse args → call functions → done
+4. **Dependencies are declared**, not remembered
+
+## Modules: Python's import system
+
+```{pyodide}
+#| label: modules-py
+# In real projects this lives in qc_utils.py and you'd `import qc_utils`.
+# In-browser, we simulate the file with a module object:
+import types
+qc_utils = types.ModuleType("qc_utils")
+
+qc_utils.pct_detected = lambda detected, total: (
+    round(detected / total * 100, 2) if total else 0.0)
+
+# now the import forms (from a real file these are identical):
+import sys
+sys.modules["qc_utils"] = qc_utils      # make it importable
+from qc_utils import pct_detected       # ← `from X import Y`
+
+print(pct_detected(3250, 5000))
+```
+
+The part AI-generated scripts always get right but learners never do:
+`if __name__ == "__main__":`. It means "only run the analysis when executed
+directly — NOT when imported":
+
+```python
+# qc_pipeline.py
+def run_pipeline(samples): ...
+
+if __name__ == "__main__":       # script mode only
+    run_pipeline(load_samples("data/raw/"))
+```
+
+Now `import qc_pipeline` is side-effect free → safe to test, safe to reuse.
+
+## R's flatter world: source() and library()
+
+R has no import statement; everything lives in one global session. Two
+consequences:
+
+```r
+source("R/utils.R")     # pastes the file in — order matters, name clashes lurk
+library(bioseqkit)      # packages ARE the architecture — the fix for clashes
+```
+
+Which is why R's answer to "where should this function live" is more often
+**"in a package"** than Python's ("in a module"). You'll build one Friday.
+
+## Environments: renv and uv (the local-tool lesson)
+
+This section runs on your **Mac** (browser can't manage environments).
+Commands you should be able to run blind:
+
+```bash
+# Python — uv (fast, modern; falls back to venv+pip)
+uv init && uv add pandas numpy scipy    # creates pyproject.toml + uv.lock
+uv run python script.py                 # runs INSIDE the locked env
+
+# R — renv
+renv::init()        # one-time per project: creates renv/ + .Rprofile
+renv::snapshot()    # record exact package versions into renv.lock
+renv::restore()     # rebuild THIS project's exact library from the lock
+```
+
+`renv.lock` / `uv.lock` are the difference between "works on my machine"
+and "works on the reviewer's machine". Commit them.
+
+::: {.callout-tip}
+## Seeded connection to bioinformatics
+Every published scRNA-seq pipeline you admire (Seurat workflows, scVelo
+notebooks) ships an environment file. It's the norm, not a luxury.
+:::
+
+## Exceptions: expecting failure without drowning in it
+
+Philosophy in one line: **let programming bugs crash loudly; handle
+*expected* environmental failures (missing file, bad input) explicitly.**
+
+```{pyodide}
+#| label: exceptions
+def read_concentration(value):
+    """Parse a concentration that might be 'n/a', '', or -999 sentinel."""
+    try:
+        v = float(value)
+    except (TypeError, ValueError) as e:      # catch SPECIFIC, name it
+        raise ValueError(f"bad concentration: {value!r}") from e
+    if v == -999:
+        raise ValueError("sentinel -999 must be cleaned before parsing")
+    return v
+
+print(read_concentration("12.5"))
+try:
+    read_concentration("n/a")
+except ValueError as e:
+    print("handled:", e)
+```
+
+```{webr}
+#| label: exceptions-r
+read_concentration <- function(value) {
+  v <- suppressWarnings(as.numeric(value))
+  if (is.na(v)) stop("bad concentration: '", value, "'")
+  if (v == -999) stop("sentinel -999 must be cleaned before parsing")
+  v
+}
+
+read_concentration("12.5")
+
+result <- tryCatch(read_concentration("n/a"),
+                   error = function(e) {
+                     message("handled: ", conditionMessage(e))
+                     NA_real_
+                   })
+result
+```
+
+Same anatomy in both: **try the optimistic path → name the failure → decide
+(retry? default? abort?)**. `raise ... from e` / `tryCatch`'s handler keeps
+the original cause attached — future-you reads the chain and knows why.
+
+## Logging: print()'s grown-up sibling
+
+`print` goes to whoever happens to be watching and says nothing about
+*when* or *how bad*. Logging has levels and destinations:
+
+```{pyodide}
+#| label: logging
+import logging
+logging.basicConfig(level=logging.INFO,
+                    format="%(levelname)s %(message)s")
+
+logging.debug("loop var: %s", "x")     # hidden unless level=DEBUG
+logging.info("processed %d samples", 42)
+logging.warning("3 samples below min reads")
+# logging.error / logging.exception (logs + traceback) at the top level
+```
+
+Rule of thumb: **`message()`/`logging.info` for progress, `warning()` for
+"output may be subtly wrong", `stop()`/`raise` for "refusing to continue"**.
+AI-generated code over-uses `print` for all three — refactor it.
+
+## Type hints: documentation the computer can check
+
+```{pyodide}
+#| label: typing
+def gc_content(seq: str, *, decimals: int = 2) -> float:
+    """Percent GC, rounded. Hints are documentation + tooling, not runtime."""
+    if not isinstance(seq, str):
+        raise TypeError("seq must be a string")
+    return round(sum(b in "GC" for b in seq.upper()) / len(seq) * 100, decimals)
+
+print(gc_content("ATGC"))
+print(gc_content("atgcatgc", decimals=1))
+```
+
+Hints do nothing at runtime (pass `42` and Python won't stop you — your
+guard does). Their value: editors/`mypy` catch mismatch *before* running,
+and AI-assisted code becomes far more predictable when signatures are typed.
+In R the cultural equivalent is roxygen `@param` types — write them.
+
+## Drills (live pad)
+
+```{pyodide}
+#| label: drills
+import logging
+
+# 1. try/except that catches int("abc") and prints the error's message
+
+# 2. Raise ValueError("negative") from a function when n < 0; catch it outside
+
+# 3. finally: prove it runs even after an exception
+
+# 4. Custom exception class class BadSampleError(Exception) — raise & catch it
+
+# 5. Type-hinted def median(xs: list[float]) -> float with a guard
+
+# 6. logging.warning with %s-style lazy formatting — why lazy? (comment)
+
+# 7. dict.get(key, default) as "expected miss" handling — contrast with try/except
+
+# 8. Chained exception: raise RuntimeError("ctx") from ValueError("root")
+#    — print both messages via the __cause__
+```
+
+::: {.callout-tip collapse="true"}
+## Expected answers
+1. `try: int("abc")\nexcept ValueError as e: print(e)` — "invalid literal..."
+2. `def f(n):\n    if n < 0: raise ValueError("negative")` + try/except around `f(-1)`
+3. `try:\n    1/0\nfinally:\n    print("runs anyway")` — cleanup belongs here
+4. `class BadSampleError(Exception): pass` — then raise/catch by name
+5. `def median(xs: list[float]) -> float:\n    if not xs: raise ValueError("empty")\n    s = sorted(xs); m = len(s)//2\n    return s[m] if len(s)%2 else (s[m-1]+s[m])/2`
+6. lazy = values interpolated only if the level is emitted — free when DEBUG off
+7. `.get` for "default is a fine answer"; try/except for "absence is a problem"
+8. `try: ... except ValueError as e: raise RuntimeError("ctx") from e` —
+   `e.__cause__` holds the root
+:::
+
+```{webr}
+#| label: drills-r
+# 1. tryCatch(int("x"-like failure): as.numeric("abc") with error handler -> NA
+
+# 2. warning() vs stop() vs message() — run all three, observe fate of output
+
+# 3. suppressWarnings(as.numeric("abc")) — when is suppression OK?
+
+# 4. tryCatch with BOTH error and warning handlers on log(-1)
+
+# 5. finally = expression in tryCatch: prove it runs
+```
+
+::: {.callout-tip collapse="true"}
+## Expected answers (R)
+1. `tryCatch(as.numeric("abc"), error = function(e) NA_real_)`
+2. `warning` continues + prints; `stop` halts; `message` logs to stderr —
+   the three flavors of "talking to the user"
+3. When you *know* NAs are expected and handled next line (e.g. after `na_if`)
+4. `tryCatch(log(-1), warning = function(w) NaN, error = function(e) NA)`
+   — log(-1) warns + returns NaN in R
+5. `tryCatch(stop("x"), error = function(e) e, finally = cat("cleanup\n"))`
+:::
+
+## Exercises
+
+### Exercise 1 — fail-loud wrapper
+
+Write `load_counts(path_map)` where `path_map` is a dict of sample → value
+string; use `float()` inside try/except, re-raising `ValueError` with the
+sample name in the message (so you know WHO failed, not just what).
+
+```{pyodide}
+#| exercise: ex-w3d2-load
+def load_counts(path_map: dict[str, str]) -> dict[str, float]:
+    ______
+
+print(load_counts({"s1": "12.5", "s2": "30"}))
+```
+
+::: {.hint exercise="ex-w3d2-load"}
+Loop samples; `try: out[s] = float(v)` / `except ValueError as e:
+raise ValueError(f"sample {s}: bad value {v!r}") from e`.
+:::
+
+::: {.solution exercise="ex-w3d2-load"}
+```python
+def load_counts(path_map: dict[str, str]) -> dict[str, float]:
+    out = {}
+    for sample, value in path_map.items():
+        try:
+            out[sample] = float(value)
+        except ValueError as e:
+            raise ValueError(f"sample {sample}: bad value {value!r}") from e
+    return out
+```
+:::
+
+### Exercise 2 — custom exception hierarchy
+
+Create `class QCError(Exception)` and subclass `LowReadsError(QCError)`.
+Write `check_reads(n, minimum=1_000_000)` raising LowReadsError when short;
+catch ONLY QCError in the caller.
+
+```{pyodide}
+#| exercise: ex-w3d2-exc
+______
+```
+
+::: {.hint exercise="ex-w3d2-exc"}
+Inheritance means `except QCError` catches `LowReadsError` too — that's the
+point of a hierarchy.
+:::
+
+::: {.solution exercise="ex-w3d2-exc"}
+```python
+class QCError(Exception):
+    pass
+
+class LowReadsError(QCError):
+    pass
+
+def check_reads(n: int, minimum: int = 1_000_000) -> None:
+    if n < minimum:
+        raise LowReadsError(f"{n} reads < minimum {minimum}")
+
+for n in (500_000, 2_000_000):
+    try:
+        check_reads(n)
+        print(n, "passed")
+    except QCError as e:
+        print("QC failed:", e)
+```
+:::
+
+### Exercise 3 — R's tryCatch ladder
+
+`safe_log(x)` returns `log(x)` normally, `NaN` with a warning message when x
+< 0 (R's log warns), and `NA_real_` with an error message when non-numeric.
+Test on `c(1, -1, "a")` via a loop.
+
+```{webr}
+#| exercise: ex-w3d2-safelog
+safe_log <- function(x) {
+  ______
+}
+
+for (x in list(1, -1, "a")) {
+  out <- safe_log(x)
+  cat("safe_log(", deparse(x), ") =", out, "\n", sep = "")
+}
+```
+
+::: {.hint exercise="ex-w3d2-safelog"}
+`tryCatch(log(x), warning = function(w) NaN,
+error = function(e) NA_real_)` — R dispatches to the handler matching the
+condition class.
+:::
+
+::: {.solution exercise="ex-w3d2-safelog"}
+```r
+safe_log <- function(x) {
+  tryCatch(
+    log(x),
+    warning = function(w) NaN,
+    error = function(e) NA_real_
+  )
+}
+```
+:::
+
+### Exercise 4 — module with an entry guard
+
+Write the two-part pattern in one cell: a `summarize(xs)` function plus a
+`__main__`-style demo that only runs because we *simulate* script mode.
+Explain (comment) what changes when imported.
+
+```{pyodide}
+#| exercise: ex-w3d2-guard
+______
+
+# simulate: python summarize.py
+__name__ = "__main__"
+if __name__ == "__main__":
+    print(summarize([1, 2, 3, 4]))
+```
+
+::: {.hint exercise="ex-w3d2-guard"}
+`def summarize(xs): return {"n": len(xs), "mean": sum(xs)/len(xs)}` —
+the point is the guard, not the math.
+:::
+
+::: {.solution exercise="ex-w3d2-guard"}
+```python
+def summarize(xs):
+    """Summary stats dict — importable without side effects."""
+    return {"n": len(xs), "mean": sum(xs) / len(xs)}
+
+# When this file is IMPORTED, __name__ == "summarize" and the block
+# below is skipped. Only `python this_file.py` runs it.
+if __name__ == "__main__":
+    print(summarize([1, 2, 3, 4]))
+```
+:::
+
+### Exercise 5 — the architecture audit
+
+Refactor this AI-generated soup (conceptual — write your answer as a
+comment):
+
+```python
+# current code (one file, runs everything on import):
+import pandas as pd
+df = pd.read_csv("data.csv")          # runs on import!
+df = df.dropna()
+print("mean:", df["expr"].mean())
+# ...40 more lines of top-level code...
+```
+
+::: {.callout-tip collapse="true"}
+## Target shape
+```python
+# qc.py — functions only, no top-level work
+def load(path: str) -> pd.DataFrame: ...
+def summarize(df: pd.DataFrame) -> float: ...
+
+if __name__ == "__main__":            # thin script mode
+    df = load("data.csv")
+    print("mean:", summarize(df))
+```
+Why: importable = testable; the guard keeps imports side-effect free;
+paths became parameters instead of secrets.
+:::
+
+## Common pitfalls (real ones)
+
+::: {.callout-warning}
+## 1. Bare `except:` / `except Exception: pass`
+Swallows the bug AND the evidence. Catch specific exceptions, name them,
+and either handle meaningfully or re-raise with context.
+:::
+
+::: {.callout-warning}
+## 2. `print` as error reporting
+`print("error!")` doesn't set exit codes, can't be filtered by level, and
+vanishes into stdout. Errors: `raise` (fatal), `warning` (suspicious),
+`logging/message` (progress).
+:::
+
+::: {.callout-warning}
+## 3. Environments "later"
+"Works today" ≠ reproduces tomorrow. `renv::snapshot()` / `uv lock` are
+5-minute commands that save day-long debugging; do them at project start,
+not publication time.
+:::
+
+## Self-quiz — predict the output
+
+```{pyodide}
+#| label: quiz
+# Q1: what prints?
+try:
+    int("3.5")
+except ValueError as e:
+    print("VE")
+except TypeError:
+    print("TE")
+
+# Q2: what prints?
+def f(x: int) -> str:
+    return x * 2
+print(f("ab"))
+
+# Q3: what prints (R knowledge, Python here): 
+import math
+try:
+    math.sqrt(-1)
+except ValueError:
+    print("VE caught")
+
+# Q4: what prints?
+class E(Exception): pass
+try:
+    raise E("boom")
+except Exception as e:
+    print(type(e).__name__, str(e))
+
+# Q5: R-flavored: what does tryCatch(stop("x"), error = function(e) 42) return?
+```
+
+::: {.callout-tip collapse="true"}
+## Quiz answers
+1. `VE` — `int("3.5")` raises ValueError (not TypeError); first matching
+   handler wins
+2. `"abab"` — hints are NOT runtime checks; `x * 2` happily repeats strings.
+   The hint lied, Python didn't care — guards or mypy would catch it
+3. `VE caught` — domain errors raise in Python (R's `sqrt(-1)` returns NaN
+   with a warning — opposite philosophy, know both)
+4. `E boom` — custom exceptions ARE Exceptions; `type(e).__name__` is "E"
+5. `42` — the error handler's return value becomes the expression's value
+:::
+
+## Wrap-up checklist
+
+- [ ] Functions in modules; `if __name__ == "__main__"` keeps imports clean
+- [ ] I can `uv add`/`uv sync` and `renv::init/snapshot/restore` blind
+- [ ] Specific exceptions, raised with context, caught by type
+- [ ] `logging`/`message` for progress, `warning` for suspicion, `raise`/`stop` to halt
+- [ ] Type hints on every new function signature
+- [ ] I scored 5/5 on the self-quiz
+
+**Tomorrow:** the full reproducibility stack — project template, git, seeds,
+tests, and the hand-off checklist.

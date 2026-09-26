@@ -1,0 +1,492 @@
+---
+title: "Day 3 — Reproducibility Full Stack"
+subtitle: "Week 3 · project template, git in 90 minutes, seeds, tests, hand-off checklist"
+---
+
+## Cheat sheet (90 seconds)
+
+| Layer | R | Python |
+|---|---|---|
+| seed | `set.seed(42)` | `random.seed(42)`, `np.random.seed(42)` |
+| model seed | (package-specific) | `RandomState`, `random_state=42` |
+| lock env | `renv::snapshot()` → `renv.lock` | `uv lock` → `uv.lock` |
+| restore env | `renv::restore()` | `uv sync` |
+| session record | `sessionInfo()` | `pip freeze` / `uv pip list` |
+| run tests | `testthat::test_dir("tests")` | `pytest` |
+| version it | `git init && git add && git commit` | same |
+
+## The 2 a.m. problem
+
+Six weeks ago you made a figure. It's in `figure_final_v3_NEW.png`. Which
+script? Which data version? Which package versions? Did the random forest
+use a seed? You are about to re-run everything from scratch — this course's
+reproducibility stack exists so the answer is ever-after: *"cd project;
+make; done."*
+
+Four layers, cheapest first:
+
+1. **Structure** — a predictable project layout
+2. **Determinism** — seeds on everything random
+3. **Provenance** — git history + locked environments
+4. **Verification** — tests that prove the core still works
+
+## Layer 1 — the project template
+
+```
+my-analysis/
+├── README.md            # what this is, how to run it (the 5-minute version)
+├── data/
+│   ├── raw/             # READ-ONLY. scripts never write here. ever.
+│   └── processed/       # script outputs, regenerable from raw/
+├── R/ or src/           # functions (importable/testable, no top-level code)
+├── scripts/             # numbered pipelines: 01_import.R, 02_qc.R ...
+#   (or in Python:      src/ + scripts/ — same idea)
+├── output/              # figures, tables — regenerable, git-ignored if big
+├── renv.lock / uv.lock  # exact dependency versions (W3D2)
+└── .gitignore           # raw data too big? output? .Rhistory? declare it
+```
+
+Two rules carry most of the value: **raw is read-only** (every artifact
+downstream regenerates from raw + code), and **numbered scripts** (execution
+order is documentation).
+
+## Layer 2 — determinism: seeds everywhere randomness exists
+
+```{webr}
+#| label: seeds-r
+set.seed(42)
+round(rnorm(3), 3)
+
+set.seed(42)
+round(rnorm(3), 3)     # identical — that's the whole point
+
+set.seed(1)
+sample(letters, 5)
+```
+
+```{pyodide}
+#| label: seeds-py
+import random
+import numpy as np
+
+random.seed(42);  print([round(random.gauss(0, 1), 3) for _ in range(3)])
+random.seed(42);  print([round(random.gauss(0, 1), 3) for _ in range(3)])
+
+np.random.seed(42); print(np.round(np.random.randn(3), 3))
+```
+
+Three different RNG systems, three seeds to manage:
+
+| System | Seed call | Where you meet it |
+|---|---|---|
+| R base | `set.seed(n)` | sampling, bootstrap, NB noise |
+| Python stdlib | `random.seed(n)` | shuffling lists |
+| numpy | `np.random.seed(n)` / `rng = np.random.default_rng(n)` | everything array-shaped |
+| sklearn | `random_state=n` per estimator | train/test, forests |
+
+::: {.callout-warning}
+## The notebook trap
+Setting the seed in cell 1 does NOT make a notebook reproducible — re-run
+cell 7 twice and cell 12 changes. **Set the seed immediately before each
+random operation** (or in the function that does the random work). This is
+the most common reproducibility bug in Jupyter/Quarto analyses.
+:::
+
+## Layer 3 — provenance: git in 90 minutes
+
+You already use it for this course (the site deploys on push). The daily
+loop for an analysis project:
+
+```bash
+git init                          # once per project
+git add README.md .gitignore      # stage deliberately — not add -A on autopilot
+git commit -m "scaffold project"  # a commit = a save point with a message
+
+git checkout -b qc-experiment     # branch: try something risky in parallel
+# ...work, commit, work, commit...
+git checkout main && git merge qc-experiment
+
+git push                          # backup + collaboration + history
+```
+
+What goes in `.gitignore` for an analysis project: `output/` (regenerable),
+big raw data (git isn't a file server — use a data store), `.Rhistory`,
+`.RData`, `__pycache__/`, `.venv/`. What never gets ignored:
+`renv.lock`, `uv.lock`, `README.md`, the code.
+
+::: {.callout-tip}
+## Commit messages are lab notes
+"fix" tells nobody anything. "qc: drop reads < 1000 (adds 2 samples back)"
+tells future-you exactly what changed and why — searchable with
+`git log --oneline` / `git log -S "min_reads"`.
+:::
+
+## Layer 4 — verification: tests for anything with math
+
+Not everything needs tests. **Pure functions with non-obvious logic do** —
+your fold-change calculator, your QC filter, your parser. Both languages'
+tools run in-browser, so let's prove it:
+
+```{webr}
+#| label: testthat-live
+library(testthat)
+
+gc_content <- function(seq) {
+  if (!is.character(seq) || length(seq) != 1) stop("seq must be a single string")
+  if (nchar(seq) == 0) return(0)
+  round(sum(strsplit(toupper(seq), "")[[1]] %in% c("G", "C")) / nchar(seq) * 100, 2)
+}
+
+test_that("gc_content basics", {
+  expect_equal(gc_content("ATGC"), 50)
+  expect_equal(gc_content(""), 0)
+  expect_error(gc_content(c("AT", "GC")), "single string")
+})
+
+test_that("gc_content catches a classic bug", {
+  # division by nchar BEFORE the NA check — empty string would NaN:
+  expect_no_error(gc_content(""))
+})
+```
+
+```{pyodide}
+#| label: pytest-style-live
+def pct_detected(detected: int, total: int) -> float:
+    if total == 0:
+        return 0.0
+    return round(detected / total * 100, 2)
+
+# pytest collects functions named test_* — same idea, manually invoked here:
+def test_pct_detected():
+    assert pct_detected(50, 200) == 25.0
+    assert pct_detected(0, 0) == 0.0
+    assert pct_detected(1, 0) == 0.0          # the guard IS the test target
+
+test_pct_detected()
+print("1 test passed")
+```
+
+Real projects: `testthat::test_dir("tests/testthat")` and `pytest` from the
+project root (Friday's Project 3 does exactly this, in CI).
+
+::: {.callout-tip}
+## What deserves a test in bioinformatics code
+Statistical directionality (fold changes point the right way), boundary
+conditions (empty inputs, zero denominators), sentinel handling (-999, "n/a"
+→ NA — Project 1's whole theme), and anything you've been bitten by once.
+One regression test per bug, forever.
+:::
+
+## The hand-off checklist (pin this)
+
+Every analysis you hand to tomorrow-you, a collaborator, or a journal must
+pass:
+
+- [ ] Runs top-to-bottom from a fresh session (R: `Ctrl+Shift+F10` then run all; Python: fresh `python script.py`)
+- [ ] All randomness seeded — re-run produces identical numbers
+- [ ] `renv.lock`/`uv.lock` committed; collaborator can `restore`/`sync`
+- [ ] `sessionInfo()` / `pip freeze` printed at the end of the report
+- [ ] Raw data untouched; processed data regenerates from scripts
+- [ ] Core functions have tests that pass
+- [ ] README says what it is, what order to run things, and how long it takes
+
+```{webr}
+#| label: sessioninfo
+# The last chunk of every reproducible R document:
+cat(R.version.string, "\n")
+cat("attached base packages:", paste(.packages(), collapse = ", "), "\n")
+```
+
+## Drills (live pad)
+
+```{webr}
+#| label: drills
+# 1. set.seed(7); mean(rnorm(1000)) — run twice, confirm identical to 4 digits
+
+# 2. sample(1:6, 2) twice with the same seed — predict before running
+
+# 3. sessionInfo() vs R.version.string — when is each the right tool?
+
+# 4. Write a one-line testthat expectation that gc_content("GGCC") == 100
+
+# 5. Which .gitignore line keeps __pycache__ out of git? (comment answer)
+
+# 6. set.seed inside a function vs once at script top — when does each fail?
+```
+
+::: {.callout-tip collapse="true"}
+## Expected answers
+1. ~0.0221 both times — determinism is the feature
+2. Same two letters both times — the seed replays the draw
+3. `sessionInfo()` = full dependency snapshot for reports;
+   `R.version.string` = one-line version stamp for logs
+4. `expect_equal(gc_content("GGCC"), 100)`
+5. `__pycache__/` (and `.pytest_cache/`)
+6. Script-top fails when chunks re-run out of order (notebooks); in-function
+   fails only if the function is *meant* to be stochastic across calls
+:::
+
+```{pyodide}
+#| label: drills-py
+import numpy as np
+import random
+
+# 1. np.random.seed(0); np.random.rand(3) — twice, identical?
+
+# 2. rng = np.random.default_rng(42) — draw twice from rng WITHOUT reseeding:
+#    same or different? and why is default_rng preferred over np.random.seed?
+
+# 3. sklearn's RandomState equivalent: comment where random_state= goes
+
+# 4. Write assert-based tests for pct_detected with the zero-total guard
+
+# 5. Name one thing that belongs in .gitignore and one that must NEVER be
+#    ignored (comments)
+```
+
+::: {.callout-tip collapse="true"}
+## Expected answers (Python)
+1. Identical — `np.random.seed` replays the global stream
+2. Different — the generator advances; `default_rng` is the modern
+   bit-generator API (global-state-free, faster, safer)
+3. On every estimator AND the split: `train_test_split(..., random_state=42)`,
+   `RandomForestClassifier(..., random_state=42)`
+4. `assert pct_detected(0, 0) == 0.0` etc. — see Layer 4 cell
+5. Ignore: `.venv/`, `output/`; never: `renv.lock`, `uv.lock`, raw-data checksums
+:::
+
+## Exercises
+
+### Exercise 1 — determinize the analysis
+
+This function is secretly non-deterministic twice. Find both, fix them, and
+add a seed parameter defaulting to 42.
+
+```{pyodide}
+#| exercise: ex-w3d3-determinize
+import numpy as np
+
+def bootstrap_mean(xs, n_boot=1000):
+    """Bootstrap the mean — but reproducibly."""
+    ______
+
+m1 = bootstrap_mean([1, 2, 3, 4, 5])
+m2 = bootstrap_mean([1, 2, 3, 4, 5])
+print(m1 == m2)      # must be True
+```
+
+::: {.hint exercise="ex-w3d3-determinize"}
+Add `seed=42` parameter; create `rng = np.random.default_rng(seed)` and use
+`rng.integers`/`rng.choice` for resampling — no global seed needed.
+:::
+
+::: {.solution exercise="ex-w3d3-determinize"}
+```python
+def bootstrap_mean(xs, n_boot=1000, seed=42):
+    """Bootstrap the mean, reproducibly."""
+    rng = np.random.default_rng(seed)
+    xs = np.asarray(xs)
+    idx = rng.integers(0, len(xs), size=(n_boot, len(xs)))
+    return float(xs[idx].mean(axis=1).mean())
+```
+:::
+
+### Exercise 2 — regression test for a real bug
+
+Here's `fold_change` with a planted bug (zero control → inf). Write
+`testthat` tests that (a) catch the bug as-is, (b) would pass for the fixed
+version (add pseudocount 1 to numerator and denominator).
+
+```{webr}
+#| exercise: ex-w3d3-foldchange
+fold_change <- function(treat, ctrl) {
+  log2(treat / ctrl)          # BUG: log2(0) = -Inf; log2(x/0) = Inf
+}
+
+test_that("fold_change handles zeros with pseudocount", {
+  ______
+})
+```
+
+::: {.hint exercise="ex-w3d3-foldchange"}
+Tests express the CONTRACT, not the bug: `expect_false(is.infinite(fc(1, 0)))`,
+`expect_equal(fc(2, 2), 0)`, `expect_equal(fc(8, 2), 2)` (with pseudocount:
+log2(9/3) = 1.585 — decide your contract and test it).
+:::
+
+::: {.solution exercise="ex-w3d3-foldchange"}
+```r
+# Fixed version satisfying the tests:
+fold_change <- function(treat, ctrl) {
+  log2((treat + 1) / (ctrl + 1))
+}
+
+test_that("fold_change handles zeros with pseudocount", {
+  expect_false(is.infinite(fold_change(1, 0)))
+  expect_false(is.nan(fold_change(0, 0)))
+  expect_equal(fold_change(2, 2), 0)
+  expect_equal(fold_change(8, 2), log2(9 / 3))
+})
+```
+:::
+
+### Exercise 3 — the session stamp
+
+Write `stamp()` that prints the R version string, today's date, and the
+number of attached packages — the one-call version of the hand-off
+checklist's last item.
+
+```{webr}
+#| exercise: ex-w3d3-stamp
+stamp <- function() {
+  ______
+}
+
+stamp()
+```
+
+::: {.hint exercise="ex-w3d3-stamp"}
+`cat(R.version.string, "\n", format(Sys.Date()), "\n", length(.packages()), " packages attached\n", sep = "")`
+:::
+
+::: {.solution exercise="ex-w3d3-stamp"}
+```r
+stamp <- function() {
+  cat(R.version.string, "\n",
+      "date:", format(Sys.Date()), "\n",
+      "attached packages:", length(.packages()), "\n",
+      sep = " ")
+}
+```
+:::
+
+### Exercise 4 — the project skeleton generator
+
+Write `scaffold_project(name)` (Python) that prints the tree from Layer 1
+with the right `.gitignore` entries — the function you'll actually reuse.
+
+```{pyodide}
+#| exercise: ex-w3d3-scaffold
+def scaffold_project(name: str) -> str:
+    ______
+
+print(scaffold_project("my-analysis"))
+```
+
+::: {.hint exercise="ex-w3d3-scaffold"}
+A multi-line f-string; include data/raw, data/processed, src, scripts,
+output, README.md, and the .gitignore contents.
+:::
+
+::: {.solution exercise="ex-w3d3-scaffold"}
+```python
+def scaffold_project(name: str) -> str:
+    return f"""{name}/
+├── README.md
+├── data/
+│   ├── raw/          # READ-ONLY
+│   └── processed/
+├── src/
+├── scripts/
+├── output/
+├── uv.lock
+└── .gitignore        # output/, .venv/, __pycache__/"""
+```
+:::
+
+### Exercise 5 — find the reproducibility hole
+
+A colleague's script: sets `set.seed(42)` on line 1, trains a random forest,
+saves results. It's run inside a Quarto doc where chunk 3 gets re-executed
+alone. Why do results drift, and what's the minimal fix? (Answer as a
+comment.)
+
+```{webr}
+#| exercise: ex-w3d3-hole
+# Your answer:
+______
+```
+
+::: {.hint exercise="ex-w3d3-hole"}
+The seed is consumed by every random draw *between* executions; re-running
+chunk 3 alone resumes the stream from a different point.
+:::
+
+::: {.solution exercise="ex-w3d3-hole"}
+```r
+# Drift cause: the seed is set once in chunk 1; re-running chunk 3 alone
+# draws from the middle of an RNG stream whose state depends on chunks 1-2.
+# Minimal fix: set.seed(42) INSIDE the chunk (or better, inside the function
+# that fits the model, as a seed parameter).
+```
+:::
+
+## Common pitfalls (real ones)
+
+::: {.callout-warning}
+## 1. The one-seed-at-the-top fallacy
+Notebooks re-run out of order; each random step needs its own seed (or the
+seed lives in the function signature — Exercise 1's fix).
+:::
+
+::: {.callout-warning}
+## 2. Saving `.RData` "just in case"
+Auto-saving workspaces resurrects stale objects and makes scripts depend on
+ghost state. RStudio: Tools → Global Options → *never* save .RData. Python
+never had this problem; don't import it.
+:::
+
+::: {.callout-warning}
+## 3. `setwd()` in scripts
+An absolute path on your machine, broken everywhere else. Set the working
+directory ONCE in the project root (`.Rproj`/running from root), then use
+relative paths everywhere.
+:::
+
+## Self-quiz — predict the output
+
+```{webr}
+#| label: quiz
+# Q1: what prints?
+set.seed(1); a <- rnorm(1); b <- rnorm(1)
+set.seed(1); x <- rnorm(1); y <- rnorm(1)
+identical(a, x) && identical(b, y)
+
+# Q2: what prints?
+library(testthat)
+expect_length(c(1, 2, 3), 3)
+"ok"
+
+# Q3: trap — what prints?
+set.seed(1); s1 <- sample(1:10, 3)
+set.seed(2); s2 <- sample(1:10, 3)
+identical(s1, s2)
+
+# Q4: what does renv::snapshot() NOT do?
+# a) write renv.lock  b) install packages  c) record versions  d) pin Bioconductor version
+
+# Q5: your analysis is seeded and locked, but a collaborator gets different
+# numbers — most likely missing layer?
+```
+
+::: {.callout-tip collapse="true"}
+## Quiz answers
+1. `TRUE` — reseeding replays the stream identically
+2. `"ok"` — passing expectations return invisibly; no output = pass
+3. `FALSE` — different seeds, different draws (the point of seeding)
+4. b — snapshot *records* versions; `renv::restore()` installs them
+5. Data provenance — same code + seed on different data versions diverges;
+   raw-is-read-only + checksums closes the loop
+:::
+
+## Wrap-up checklist
+
+- [ ] Project template with read-only raw/ and numbered scripts
+- [ ] Seeds at every random step, including `random_state=` on estimators
+- [ ] `renv.lock`/`uv.lock` committed; `sessionInfo()` in every report
+- [ ] Daily git loop: branch → commit → merge → push, messages that explain why
+- [ ] Regression test for every bug you've ever fixed
+- [ ] I scored 5/5 on the self-quiz
+
+**Tomorrow:** Algorithm Gym #3 — stacks, recursion, binary search, and your
+first dynamic programming.

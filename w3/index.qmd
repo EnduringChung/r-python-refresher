@@ -1,0 +1,34 @@
+---
+title: "Week 3 — Software Engineering + Reproducibility"
+subtitle: "OOP, architecture, the full repro stack, DP algorithms, and your own packages"
+---
+
+## The week at a glance
+
+| Day | Lesson | Superpower gained |
+|---|---|---|
+| 1 | [Python Classes & OOP](day1-oop.qmd) | `class`/`__init__`/dataclasses — plus S3/R6 fluency |
+| 2 | [Architecture & Robust Code](day2-architecture.qmd) | modules, envs (renv/uv), exceptions, logging, type hints |
+| 3 | [Reproducibility Full Stack](day3-reproducibility.qmd) | project template, git, seeds, tests, hand-off checklist |
+| 4 | [Algorithm Gym #3](day4-gym3.qmd) | stacks, recursion, binary search, memoization |
+| 5 | [Project 3](day5-project3.qmd) | implement `bioseqkit` in R **and** Python → CI green |
+
+## Ground rules for the week
+
+1. **Classes bundle data + behavior.** If you're passing the same 5 arguments
+   into every function, that's a class asking to exist (a Seurat object is
+   exactly this idea).
+2. **Fail fast, at the boundary.** Guards at function entry (W1D3), typed
+   exceptions at I/O edges, no bare `except:`.
+3. **Every analysis is re-runnable by tomorrow-you**: seeds, locked
+   environments, git history, tests for anything with math in it.
+4. End-of-week checkpoint: your two `bioseqkit` packages pass CI on GitHub.
+
+## Why this week matters for your actual work
+
+- **Seurat/SingleCellExperiment/DESeqDataSet are objects** — W3D1 gives you
+  the X-ray vision to know what's inside and why methods dispatch.
+- **AI-generated code fails at the seams** — W3D2's error handling and
+  validation turn silent wrongness into loud, fixable failures.
+- **"It worked on my machine" is a you-problem** — W3D3 makes tomorrow-you
+  and your collaborators first-class users of your scripts.

@@ -1,0 +1,539 @@
+---
+title: "Day 1 — Python Classes & OOP (with S3/R6 X-ray vision)"
+subtitle: "Week 3 · `class`, `__init__`, dataclasses, properties — and what Seurat really is"
+---
+
+## Cheat sheet (90 seconds)
+
+| Task | Python | R |
+|---|---|---|
+| define a class | `class Sample:` | S3: class attr + functions; R6: `R6Class()` |
+| constructor | `def __init__(self, id): self.id = id` | R6: `public = list(initialize = function(id) self$id <- id)` |
+| create instance | `s = Sample("S1")` | R6: `Sample$new("S1")` |
+| access member | `s.id` | R6: `s$id` · S3: `s$id` (list) |
+| method | `def count(self): return len(self.reads)` | R6: function in `public` |
+| string repr | `__repr__` / `__str__` | S3: `print.Sample <- function(x)...` |
+| data holder | `@dataclass` | plain `list()` + S3 class |
+| copy semantics | **reference** (same object!) | R6: reference (until `clone()`) · lists: copy |
+
+## Why OOP exists (for a data person)
+
+A class answers one question: *"what if this data and the functions that
+operate on it always travel together?"* You already use the result daily —
+a `Seurat` object bundles counts, metadata, and the methods that know how to
+normalize/plot them. A sklearn `Pipeline` bundles steps and knows how to
+`fit`/`transform`. Today you build tiny versions from scratch so the magic
+becomes mechanics.
+
+## The anatomy of a class
+
+```{pyodide}
+#| label: anatomy
+class Sample:
+    species = "Homo sapiens"          # CLASS attribute — shared by all
+
+    def __init__(self, sample_id, reads):
+        self.sample_id = sample_id    # INSTANCE attributes — per object
+        self.reads = reads
+
+    def total_reads(self):            # method — first param is always self
+        return sum(self.reads)
+
+    def __repr__(self):               # what print() shows
+        return f"Sample({self.sample_id!r}, n_reads={len(self.reads)})"
+
+s1 = Sample("S1", [100, 250])
+s2 = Sample("S2", [90, 180, 400])
+
+print(s1)                # uses __repr__
+print(s1.total_reads())
+print(s1.species, "==", s2.species)   # class attr, same on both
+```
+
+Read `__init__` as: *"when someone calls `Sample(...)`, run this, with `self`
+bound to the new object."* **`self` is not a keyword** — it's just the
+conventional name for "this instance"; it's passed automatically.
+
+## The shared-mutable-class-attribute trap (interview classic)
+
+```{pyodide}
+#| label: classattr-trap
+class Plate:
+    wells = []                 # ❌ ONE list shared by every plate!
+
+    def __init__(self, name):
+        self.name = name
+
+p1, p2 = Plate("A"), Plate("B")
+p1.wells.append("A1")
+print(p2.wells)               # ['A1'] — p2 "grew" a well it never added!
+```
+
+Fix: immutable class attributes only (constants); everything per-object
+belongs in `__init__`:
+
+```{pyodide}
+#| label: classattr-fixed
+class Plate:
+    species = "Homo sapiens"          # constant: fine as class attr
+
+    def __init__(self, name):
+        self.name = name
+        self.wells = []               # ✅ fresh list per instance
+
+p1, p2 = Plate("A"), Plate("B")
+p1.wells.append("A1")
+print(p1.wells, p2.wells)
+```
+
+## Dunders worth knowing (and only these)
+
+```{pyodide}
+#| label: dunders
+class GeneSet:
+    def __init__(self, name, genes):
+        self.name, self.genes = name, set(genes)
+
+    def __len__(self):                # enables len()
+        return len(self.genes)
+
+    def __contains__(self, gene):     # enables `in`
+        return gene in self.genes
+
+    def __repr__(self):
+        return f"GeneSet({self.name!r}, {len(self)} genes)"
+
+    def __or__(self, other):          # enables |
+        return GeneSet(f"{self.name}|{other.name}", self.genes | other.genes)
+
+a = GeneSet("immune", ["CD3D", "CD8A", "MS4A1"])
+b = GeneSet("bcell", ["MS4A1", "CD79A"])
+
+print(len(a), "CD3D" in a, a | b)
+```
+
+`__repr__` is the highest-value dunder: it turns `print(obj)` from
+`<__main__.Sample object at 0x...>` into something debuggable. Rule: if you
+write a class, write `__repr__`.
+
+## Dataclasses: for when it's *just data*
+
+Most "classes" in analysis code are data holders. `@dataclass` writes
+`__init__` and `__repr__` for you:
+
+```{pyodide}
+#| label: dataclass
+from dataclasses import dataclass, field
+
+@dataclass
+class QCReport:
+    sample_id: str
+    n_reads: int
+    pct_dup: float = 0.0
+    flags: list[str] = field(default_factory=list)   # ✅ the fix for the trap
+
+r = QCReport("S1", 5_200_000, 8.3)
+print(r)                       # free __repr__
+print(r == QCReport("S1", 5_200_000, 8.3))   # free __eq__ (value equality!)
+```
+
+Note `field(default_factory=list)` — the dataclass-native cure for the
+shared-mutable-default trap. **Use dataclasses for ~80% of your class
+needs**; hand-written classes only when behavior is the point.
+
+## Properties: computed attributes that look like data
+
+```{pyodide}
+#| label: properties
+class Peptide:
+    def __init__(self, seq):
+        self.seq = seq.upper()
+
+    @property
+    def gc(self):                     # used as p.gc, NOT p.gc()
+        s = self.seq
+        return round(sum(b in "GC" for b in s) / len(s) * 100, 2) if s else 0.0
+
+p = Peptide("ATGGCCATTGTAATGGGCCGCTGAAAGGGTGCCCGATAG")
+print(p.gc)
+```
+
+Use a property when a value is *derivable* — callers never need to know it's
+computed. That's encapsulation without ceremony.
+
+## The R mirror: S3 in 5 minutes, R6 in 10
+
+**S3** = "a list with a class label + functions that dispatch on the label":
+
+```{webr}
+#| label: s3
+Sample <- function(sample_id, reads) {
+  structure(list(sample_id = sample_id, reads = reads), class = "Sample")
+}
+total_reads <- function(x) UseMethod("total_reads")     # the generic
+total_reads.Sample <- function(x) sum(x$reads)          # the method
+
+s1 <- Sample("S1", c(100, 250))
+class(s1)
+total_reads(s1)          # dispatch found total_reads.Sample
+```
+
+That's the whole trick. `summary.lm`, `plot.Seurat` (conceptually),
+`predict.glm` — all are `UseMethod` + per-class functions. **Reading** S3
+code is now possible; that was the goal.
+
+**R6** is R's class system that *feels* like Python — including reference
+semantics:
+
+```{webr}
+#| label: r6
+library(R6)
+
+Counter <- R6Class("Counter",
+  public = list(
+    n = 0,
+    initialize = function(start = 0) self$n <- start,
+    add = function(x = 1) { self$n <- self$n + x; invisible(self) }
+  )
+)
+
+c1 <- Counter$new(10)
+c2 <- c1                # ⚠️ SAME object, not a copy (like Python)
+c1$add(5)
+c2$n                    # 15 — both names point at one counter
+
+c3 <- c1$clone()        # an actual copy
+c1$add(5)
+c3$n                    # 15 — unchanged by the new add
+```
+
+```{pyodide}
+#| label: r6-py-mirror
+class Counter:
+    def __init__(self, start=0):
+        self.n = start
+    def add(self, x=1):
+        self.n += x
+        return self
+
+c1 = Counter(10)
+c2 = c1                 # same object, like R6
+c1.add(5)
+print(c2.n)             # 15
+```
+
+The deep difference: **Python objects are references, R lists are values.**
+R6 exists to give Python-like mutation when you need it (and `clone()`
+when you don't).
+
+## Drills (live pad)
+
+```{pyodide}
+#| label: drills
+# 1. Class Primer: __init__(name, seq), method length() -> len(seq)
+
+# 2. Give Primer a __repr__ that prints Primer('name', 20nt)
+
+# 3. Make it a @dataclass instead. What changes in how you construct it?
+
+# 4. Add property mw_estimate = n_bases * 330 (no parens!)
+
+# 5. Class attr trap: class Bagnbor: items = [] ... predict the bug, then fix
+
+# 6. __contains__ on Primer so "AT" in primer works
+
+# 7. Instance vs class: make two Primers, change one's name — is the other affected?
+
+# 8. dataclass equality: two QCReports with same fields — == returns?
+
+# 9. R side (conceptual): what would print.Primer look like? (comment answer)
+
+# 10. Chaining: make Counter.add return self (it does) — c1.add(1).add(2).n?
+```
+
+::: {.callout-tip collapse="true"}
+## Expected answers
+1. `class Primer:\n    def __init__(self, name, seq):\n        self.name, self.seq = name, seq\n    def length(self): return len(self.seq)`
+2. `def __repr__(self): return f"Primer({self.name!r}, {len(self.seq)}nt)"`
+3. `@dataclass\nclass Primer:\n    name: str\n    seq: str` — no explicit `__init__`
+4. `@property\n def mw_estimate(self): return len(self.seq) * 330`
+5. `items = []` is shared; fix with `self.items = []` in `__init__`
+6. `def __contains__(self, sub): return sub in self.seq`
+7. No — `name` is an instance attribute; each object has its own
+8. `True` — dataclasses generate `__eq__` comparing field values
+9. `print.Primer <- function(x) cat(...)` + `class(primer) <- "Primer"`
+10. `13` — returning `self` enables chaining (10 + 1 + 2)
+:::
+
+## Exercises
+
+### Exercise 1 — a counting class
+
+Build `QualityControl` with `__init__(self, name)` starting an empty list of
+scores, `add(score)` (append + return self), `mean()` (guard: empty list →
+0.0), and a readable `__repr__`.
+
+```{pyodide}
+#| exercise: ex-w3d1-qc
+class QualityControl:
+    ______
+
+qc = QualityControl("S1").add(32).add(35).add(30)
+print(qc)          # QualityControl(S1, 3 scores)
+print(qc.mean())   # 32.333...
+```
+
+::: {.hint exercise="ex-w3d1-qc"}
+`self.scores = []` in `__init__` (never as class attribute); `add` returns
+`self` for chaining; guard `mean` with `if not self.scores: return 0.0`.
+:::
+
+::: {.solution exercise="ex-w3d1-qc"}
+```python
+class QualityControl:
+    def __init__(self, name):
+        self.name = name
+        self.scores = []
+
+    def add(self, score):
+        self.scores.append(score)
+        return self
+
+    def mean(self):
+        if not self.scores:
+            return 0.0
+        return sum(self.scores) / len(self.scores)
+
+    def __repr__(self):
+        return f"QualityControl({self.name}, {len(self.scores)} scores)"
+```
+:::
+
+### Exercise 2 — a dataclass with a property
+
+`@dataclass class DMSummary: total: int; detected: int` with a property
+`pct_detected` (0–100, 2 decimals; guard total == 0 → 0.0).
+
+```{pyodide}
+#| exercise: ex-w3d1-dm
+from dataclasses import dataclass
+
+@dataclass
+class DMSummary:
+    ______
+
+d = DMSummary(total=5000, detected=3250)
+print(d.pct_detected)   # 65.0
+```
+
+::: {.hint exercise="ex-w3d1-dm"}
+Inside a dataclass, a property is defined like a method with `@property`,
+just after the fields.
+:::
+
+::: {.solution exercise="ex-w3d1-dm"}
+```python
+@dataclass
+class DMSummary:
+    total: int
+    detected: int
+
+    @property
+    def pct_detected(self) -> float:
+        if self.total == 0:
+            return 0.0
+        return round(self.detected / self.total * 100, 2)
+```
+:::
+
+### Exercise 3 — an S3 class (reading + writing)
+
+Make `DMSummary(total, detected)` an S3 constructor (list + class), a
+`pct_detected` method via UseMethod, and a `print.DMSummary`.
+
+```{webr}
+#| exercise: ex-w3d1-s3
+DMSummary <- function(total, detected) {
+  ______
+}
+
+pct_detected <- function(x) UseMethod("pct_detected")
+pct_detected.DMSummary <- function(x) {
+  if (x$total == 0) return(0)
+  round(x$detected / x$total * 100, 2)
+}
+
+d <- DMSummary(5000, 3250)
+pct_detected(d)
+```
+
+::: {.hint exercise="ex-w3d1-s3"}
+`structure(list(total = total, detected = detected), class = "DMSummary")`.
+:::
+
+::: {.solution exercise="ex-w3d1-s3"}
+```r
+DMSummary <- function(total, detected) {
+  structure(list(total = total, detected = detected), class = "DMSummary")
+}
+```
+:::
+
+### Exercise 4 — the R6 identity test
+
+Create `Plate` as an R6 class with `well_ids` (empty character vector on
+init) and `add_well(id)`. Demonstrate that `p2 <- p1` aliases the same
+object but `p2 <- p1$clone()` does not.
+
+```{webr}
+#| exercise: ex-w3d1-r6
+library(R6)
+
+Plate <- R6Class("Plate",
+  public = list(
+    well_ids = NULL,
+    initialize = function() self$well_ids <- character(0),
+    add_well = function(id) { self$well_ids <- c(self$well_ids, id); invisible(self) }
+  )
+)
+
+p1 <- Plate$new()
+p2 <- p1
+p1$add_well("A1")
+p2$well_ids          # predict!
+```
+
+::: {.hint exercise="ex-w3d1-r6"}
+The aliasing is free — the teaching point is running it and then verifying
+`p1$clone()` breaks the link.
+:::
+
+::: {.solution exercise="ex-w3d1-r6"}
+```r
+# p2$well_ids is "A1" — p1 and p2 are the SAME object.
+# Fix (when a copy is wanted): p2 <- p1$clone()
+# This is why Seurat objects eat RAM when passed around — and why
+# functions that modify them should clone() first.
+```
+:::
+
+### Exercise 5 — refactor argsoup into a class
+
+You keep writing `plot_heatmap(counts, groups, title, scale_rows)` and
+always pass the same three objects. Design the fix as a dataclass +
+methods (skeleton below — you fill it):
+
+```{pyodide}
+#| exercise: ex-w3d1-refactor
+from dataclasses import dataclass, field
+
+@dataclass
+class Experiment:
+    counts: dict          # gene -> list of values
+    groups: list          # per-sample group labels
+
+    @property
+    def n_samples(self):
+        ______
+
+    def genes_with_min_counts(self, minimum):
+        ______
+
+e = Experiment(counts={"CD3D": [10, 12, 3], "ACTB": [100, 90, 95]},
+               groups=["ctl", "ctl", "treat"])
+print(e.n_samples, e.genes_with_min_counts(50))
+```
+
+::: {.hint exercise="ex-w3d1-refactor"}
+`n_samples = len(self.groups)`; `genes_with_min_counts` returns sorted gene
+names where `min(values) >= minimum`.
+:::
+
+::: {.solution exercise="ex-w3d1-refactor"}
+```python
+    @property
+    def n_samples(self):
+        return len(self.groups)
+
+    def genes_with_min_counts(self, minimum):
+        return sorted(g for g, v in self.counts.items() if min(v) >= minimum)
+```
+:::
+
+## Common pitfalls (real ones)
+
+::: {.callout-warning}
+## 1. Mutable class/default attributes
+Covered twice today because it's the #1 OOP bug: `wells = []` at class level
+or `bucket=[]` in a signature share state across instances. Per-instance
+data goes in `__init__` (`field(default_factory=list)` for dataclasses).
+:::
+
+::: {.callout-warning}
+## 2. Forgetting `self`, or passing it
+`def mean():` inside a class explodes on call with cryptic
+"takes 0 positional arguments but 1 was given". Every instance method's
+first parameter is `self`; you never pass it manually.
+:::
+
+::: {.callout-warning}
+## 3. R6 aliasing feels like copying
+In R, `x2 <- x1` *copies* for lists but *aliases* for R6. Functions that
+"just look" at an R6 object should `clone(deep = TRUE)` first — otherwise
+they mutate the caller's data. Seurat's in-place edits follow the same rule.
+:::
+
+## Self-quiz — predict the output
+
+```{pyodide}
+#| label: quiz
+# Q1: what prints?
+class A:
+    x = []
+a1, a2 = A(), A()
+a1.x.append(1)
+print(a2.x)
+
+# Q2: what prints?
+@dataclass
+class P:
+    a: int
+p1, p2 = P(1), P(1)
+print(p1 == p2)
+
+# Q3: what prints — and why does it not error?
+class Q:
+    def greet(self):
+        return "hi"
+print(Q.greet(Q()))
+
+# Q4: R-flavored: what prints?
+# s <- structure(list(n = 3), class = "foo")
+# print(s)   # dispatches print.default or print.foo?
+
+# Q5: what prints?
+c1 = Counter(0).add(2).add(3)
+print(c1.n)
+```
+
+::: {.callout-tip collapse="true"}
+## Quiz answers
+1. `[1]` — `x` is one shared class-attribute list; the trap, in 4 lines
+2. `True` — dataclasses compare by field values
+3. `"hi"` — `Q.greet(Q())` is exactly the instance-call `Q().greet()`;
+   self-binding is just argument passing
+4. `print.default` — no `print.foo` method exists, so the generic falls
+   through to the default. S3 dispatch 101.
+5. `5` — `add` returns `self`, so calls chain
+:::
+
+## Wrap-up checklist
+
+- [ ] I can write `class`/`__init__`/method/`__repr__` from memory
+- [ ] I reach for `@dataclass` when it's data, a real class when it's behavior
+- [ ] Class attributes are constants only; instance data lives in `__init__`
+- [ ] I can read S3 dispatch (`UseMethod`) and R6 (`$`, `$new`, `clone`)
+- [ ] I scored 5/5 on the self-quiz
+
+**Tomorrow:** modules, environments, exceptions, logging, type hints —
+structuring code that outlives the chat session that wrote it.

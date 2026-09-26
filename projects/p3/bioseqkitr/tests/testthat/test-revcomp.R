@@ -12,7 +12,7 @@ test_that("rev_comp is case-insensitive, output uppercase", {
 
 test_that("rev_comp handles N", {
   skip("unskip when you implement rev_comp()")
-  expect_equal(bioseqkit::rev_comp("ATGN"), "NAT")
+  expect_equal(bioseqkit::rev_comp("ATGN"), "NCAT")
 })
 
 test_that("rev_comp guards its inputs", {

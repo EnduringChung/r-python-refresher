@@ -1,0 +1,356 @@
+---
+title: "Day 5 — Project 3: bioseqkit, twice"
+subtitle: "Week 3 · implement the package in R and Python, unskip the tests, turn CI green"
+---
+
+## Cheat sheet (60 seconds)
+
+| Task | R | Python |
+|---|---|---|
+| package skeleton | `usethis::create_package()` | `uv init --package` |
+| function files | `R/*.R` + `NAMESPACE` exports | `src/<pkg>/*.py` |
+| tests location | `tests/testthat/test-*.R` | `tests/test_*.py` |
+| load while developing | `devtools::load_all()` | `pip install -e .` |
+| run tests | `testthat::test_dir("tests/testthat")` | `pytest` |
+| install for real | `R CMD INSTALL .` | `pip install .` |
+| ship | `git push` → GitHub Actions | same workflow file |
+
+## The mission
+
+`projects/p3/` already contains both packages, **pre-built for you**:
+
+```
+projects/p3/
+├── bioseqkitr/            # R package
+│   ├── DESCRIPTION        # metadata (Authors@R needs a valid email)
+│   ├── NAMESPACE          # exports: rev_comp, gc_content, kmer_counts
+│   ├── R/
+│   │   ├── gc.R           # ✅ implemented — your worked example
+│   │   ├── revcomp.R      # ❌ raises "not implemented yet"
+│   │   └── kmers.R        # ❌ raises "not implemented yet"
+│   └── tests/testthat/    # gc tests live; others skip("unskip when...")
+└── bioseqkit_py/          # Python twin — same three functions
+    ├── pyproject.toml
+    ├── src/bioseqkit/
+    │   ├── gc.py          # ✅ implemented
+    │   ├── revcomp.py     # ❌ NotImplementedError
+    │   └── kmers.py       # ❌ NotImplementedError
+    └── tests/             # test_gc passes; others @pytest.mark.skip
+```
+
+`.github/workflows/bioseqkit.yml` runs **both test suites on GitHub** every
+time `projects/p3/**` changes. Today you make it green.
+
+**The workflow you'll practice** (this is just "how packages get made"):
+implement in the browser here → mirror into the repo files → test locally →
+commit → watch CI.
+
+## Warm-up: the contract, in-browser
+
+You don't import the repo package in the browser — you practice the
+implementation against the same tests, inline. Here is `rev_comp`'s contract:
+
+```{webr}
+#| label: revcomp-contract
+library(testthat)
+
+rev_comp_stub <- function(seq) {
+  if (!is.character(seq) || length(seq) != 1) stop("seq must be a single string")
+  stop("rev_comp() not implemented yet")     # ← replace THIS line
+}
+
+test_that("rev_comp contract", {
+  expect_equal(rev_comp_stub("ATGC"), "GCAT")    # complement: A<->T, C<->G
+  expect_equal(rev_comp_stub("AAAAAC"), "GTTTTT")
+  expect_equal(rev_comp_stub("atgc"), "GCAT")    # case-insensitive, UPPER out
+  expect_equal(rev_comp_stub("ATGN"), "NCAT")   # N stays N
+  expect_error(rev_comp_stub(c("AT", "GC")), "single string")
+})
+```
+
+Implement it right in the cell (hint: `chartr("ACGTN", "TGCAN", seq)` then
+reverse with a known idiom). Same contract, Python side:
+
+```{pyodide}
+#| label: revcomp-contract-py
+def rev_comp_stub(seq: str) -> str:
+    if not isinstance(seq, str):
+        raise TypeError("seq must be a single string")
+    raise NotImplementedError("rev_comp() not implemented yet")   # ← replace
+
+# tests
+assert rev_comp_stub("ATGC") == "GCAT"
+assert rev_comp_stub("AAAAAC") == "GTTTTT"
+assert rev_comp_stub("atgc") == "GCAT"
+assert rev_comp_stub("ATGN") == "NCAT"
+print("all rev_comp contract tests pass")
+```
+
+::: {.callout-tip collapse="true"}
+## Reference implementation (after an honest attempt)
+```r
+# R
+rev_comp <- function(seq) {
+  comp <- chartr("ACGTN", "TGCAN", toupper(seq))
+  paste(rev(strsplit(comp, "")[[1]]), collapse = "")
+}
+```
+```python
+# Python
+_COMP = str.maketrans("ACGTN", "TGCAN")
+
+def rev_comp(seq: str) -> str:
+    return seq.upper().translate(_COMP)[::-1]
+```
+Same algorithm: translate, then reverse. R reverses via index sequence,
+Python via slice step `-1` — the idioms differ, the contract is identical.
+:::
+
+## The main event: kmer_counts
+
+Two decisions to make before coding (this is the real skill):
+
+1. **Off-by-one semantics**: for `"ATATA"`, k=2 → substrings at positions
+   1..(n−k+1) → `AT, TA, AT, TA`. n−k+1 windows, not n−k.
+2. **Output shape**: R tests expect a *named integer vector sorted by name*;
+   Python tests expect a *dict* — and Python 3.7+ dicts preserve insertion
+   order, so sorted insertion gives the sorted contract.
+
+```{webr}
+#| label: kmer-contract
+library(testthat)
+
+kmer_stub <- function(seq, k) {
+  if (!is.character(seq) || length(seq) != 1) stop("seq must be a single string")
+  if (k < 1 || k > nchar(seq)) stop("k out of range")
+  stop("kmer_counts() not implemented yet")     # ← replace
+}
+
+test_that("kmer_counts contract", {
+  expect_equal(kmer_stub("ATATA", 2), c(AT = 2L, TA = 2L))
+  expect_equal(kmer_stub("AAGCT", 1), c(A = 2L, C = 1L, G = 1L, T = 1L))
+  expect_error(kmer_stub("AT", 3), "k")
+})
+```
+
+```{pyodide}
+#| label: kmer-contract-py
+def kmer_stub(seq: str, k: int) -> dict[str, int]:
+    if not isinstance(seq, str):
+        raise TypeError("seq must be a single string")
+    if k < 1 or k > len(seq):
+        raise ValueError("k out of range")
+    raise NotImplementedError("kmer_counts() not implemented yet")   # ← replace
+
+assert kmer_stub("ATATA", 2) == {"AT": 2, "TA": 2}
+assert kmer_stub("AAGCT", 1) == {"A": 2, "C": 1, "G": 1, "T": 1}
+print("all kmer contract tests pass")
+```
+
+::: {.callout-tip collapse="true"}
+## Reference implementation
+```r
+kmer_counts <- function(seq, k) {
+  if (!is.character(seq) || length(seq) != 1) stop("seq must be a single string")
+  if (k < 1 || k > nchar(seq)) stop("k out of range")
+  kmers <- substring(seq, 1:(nchar(seq) - k + 1), k:nchar(seq))
+  table(kmers)
+}
+```
+```python
+from collections import Counter
+
+def kmer_counts(seq: str, k: int) -> dict[str, int]:
+    if not isinstance(seq, str):
+        raise TypeError("seq must be a single string")
+    if k < 1 or k > len(seq):
+        raise ValueError("k out of range")
+    counts = Counter(seq[i:i + k] for i in range(len(seq) - k + 1))
+    return dict(sorted(counts.items()))
+```
+R's `substring()` vectorizes *all* start positions at once — Pattern 1
+again. Python slices in a comprehension. Same counts, same order.
+:::
+
+## Cross-language parity check (the course's thesis, one cell)
+
+```{webr}
+#| label: parity-r
+kmer_counts <- function(seq, k) {
+  kmers <- substring(seq, 1:(nchar(seq) - k + 1), k:nchar(seq))
+  table(kmers)
+}
+gc_content <- function(seq) {
+  if (nchar(seq) == 0) return(0)
+  round(sum(strsplit(toupper(seq), "")[[1]] %in% c("G", "C")) / nchar(seq) * 100, 2)
+}
+
+seq <- "ATGGCCATTGTAATGGGCCGCTGAAAGGGTGCCCGATAG"
+list(gc = gc_content(seq), kmers2 = head(kmer_counts(seq, 2), 4))
+```
+
+```{pyodide}
+#| label: parity-py
+from collections import Counter
+
+def kmer_counts(seq: str, k: int) -> dict[str, int]:
+    counts = Counter(seq[i:i + k] for i in range(len(seq) - k + 1))
+    return dict(sorted(counts.items()))
+
+def gc_content(seq: str) -> float:
+    if not seq:
+        return 0.0
+    return round(sum(b in "GC" for b in seq.upper()) / len(seq) * 100, 2)
+
+seq = "ATGGCCATTGTAATGGGCCGCTGAAAGGGTGCCCGATAG"
+print({"gc": gc_content(seq)})
+print(dict(list(kmer_counts(seq, 2).items())[:4]))
+```
+
+Identical numbers, two languages — the same guarantee your two packages
+must give. That's the whole course in one check.
+
+## Ship it: the local → CI loop
+
+On your Mac, from the repo root:
+
+```bash
+# 1. R side: implement R/revcomp.R and R/kmers.R, unskip the tests
+cd projects/p3/bioseqkitr
+R CMD INSTALL .                                   # install your edits
+Rscript -e 'testthat::test_dir("tests/testthat")' # all green locally FIRST
+
+# 2. Python side: implement revcomp.py and kmers.py, remove the skip marks
+cd ../bioseqkit_py
+pip install -e . && pytest -v
+
+# 3. Commit and let GitHub run the same suites
+git add projects/p3 && git commit -m "bioseqkit: implement rev_comp + kmer_counts"
+git push     # → Actions tab: 'bioseqkit CI' goes green
+```
+
+The CI runs **the identical commands** you just ran — green locally means
+green remotely (same R/Python versions pinned in the workflow).
+
+## Exercises
+
+### Exercise 1 — implement rev_comp in the repo
+
+Follow the ship-it loop: implement in `bioseqkitr/R/revcomp.R` and
+`bioseqkit_py/src/bioseqkit/revcomp.py`, **unskip** the four tests in each
+(delete the `skip()` / `@pytest.mark.skip` lines), run both suites locally
+until green.
+
+Completion check: R reports `OK: 12`, Python reports `12 passed`.
+
+### Exercise 2 — implement kmer_counts in the repo
+
+Same loop for kmer_counts. The R test `expect_true(!is.unsorted(names(...)))`
+enforces sorted output — if it fails, you forgot `sort()` on the table.
+
+### Exercise 3 — break it on purpose
+
+Add this test to BOTH suites, watch it fail, then fix the implementation it
+exposes:
+
+```r
+# R: add to test-kmers.R — k at the maximum legal length
+test_that("k == nchar gives the whole string", {
+  expect_equal(bioseqkit::kmer_counts("ATGC", 4), c(ATGC = 1L))
+})
+```
+
+```python
+# Python: add to test_kmers.py
+def test_k_equals_length():
+    assert kmer_counts("ATGC", 4) == {"ATGC": 1}
+```
+
+::: {.callout-tip collapse="true"}
+## Why this exercise exists
+`k > nchar` should error but `k == nchar` is legal — off-by-one territory.
+Your implementation passes only if `range(len(seq) - k + 1)` / `1:(n-k+1)`
+produces exactly one window. If it fails, your guard is off by one, not
+your loop.
+:::
+
+### Exercise 4 — parity harness
+
+Write (locally or in-browser) a checker that runs BOTH implementations over
+`["", "A", "ATGC", "NNNN", 20 random ACGT strings]` and asserts identical
+GC and k-mer outputs. In real work this is called a *cross-implementation
+conformance test* — when you port a pipeline, you write one.
+
+### Exercise 5 — make CI your regression net
+
+Add one more test to each suite for a bug that could plausibly return
+(suggestion: gc of lowercase "nnnn", or kmer with k=0 erroring). Commit,
+push, confirm CI runs them. One regression test per bug, forever — W3D3's
+rule, now enforced by a robot.
+
+## Common pitfalls (real ones)
+
+::: {.callout-warning}
+## 1. Editing the installed copy, not the source
+After editing `R/*.R` you MUST `R CMD INSTALL .` again (or use
+`devtools::load_all()`) — `library(bioseqkit)` runs the *installed* snapshot,
+not your file. Symptom: tests fail on code you already "fixed". Python's
+`pip install -e .` (editable mode) exists precisely to avoid this.
+:::
+
+::: {.callout-warning}
+## 2. Tests that import a function that doesn't exist yet
+Chicken-and-egg: keep the skip marks until the function exists, or the test
+*file* errors before your assertions ever run. Unskip → implement → green,
+in that order.
+:::
+
+::: {.callout-warning}
+## 3. Green locally, red on CI
+Read the Actions log top-to-bottom: usually a missing export (NAMESPACE) in
+R, or a version drift. The workflow pins R and Python — that's the point.
+:::
+
+## Self-quiz — predict the output
+
+```{pyodide}
+#| label: quiz
+# Q1: R — what does NAMESPACE contain for an exported function?
+# (comment answer)
+
+# Q2: what prints?
+from collections import Counter
+print(Counter("AAA")["X"])
+
+# Q3: how many 3-mers in a 100-base read? (formula)
+
+# Q4: R — after editing R/kmers.R but before R CMD INSTALL, what does
+# library(bioseqkit) give you? (comment answer)
+
+# Q5: what prints?
+print(dict(sorted(Counter("ACGT").items())))
+```
+
+::: {.callout-tip collapse="true"}
+## Quiz answers
+1. `export(function_name)` — without the export line, `:::` fails even
+   though the function exists in the package
+2. `0` — Counter returns 0 for missing keys (R's `table()` returns NA —
+   the asymmetry from Gym #1, now load-bearing)
+3. `100 − 3 + 1 = 98` — n − k + 1 windows
+4. The previously installed snapshot — your edit is invisible until you
+   re-install (pitfall #1)
+5. `{'A': 1, 'C': 1, 'G': 1, 'T': 1}` — sorted insertion; Python dicts
+   preserve order
+:::
+
+## Wrap-up checklist
+
+- [ ] I implemented three functions in two languages from contracts alone
+- [ ] I know the local loop: edit → (re)install/load → test → commit → push
+- [ ] CI runs my suites on every push to `projects/p3/**`
+- [ ] My two packages give identical answers — and I proved it
+- [ ] I scored 5/5 on the self-quiz
+
+**Next week:** tidymodels ↔ sklearn — the same model, the same splits, the
+same seeds, two grammars.

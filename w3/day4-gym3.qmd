@@ -1,0 +1,494 @@
+---
+title: "Day 4 — Algorithm Gym #3: Stacks, Recursion, Binary Search, DP"
+subtitle: "Week 3 · the toolbox behind every 'medium' interview problem"
+---
+
+::: {.callout-note}
+## Gym rules (as always)
+
+One pattern family per day, every problem in both dialects, 10–15 min of
+struggle before peeking. Today's four tools — **stacks, recursion, binary
+search, memoization** — combine into half the easy/medium LeetCode catalog.
+:::
+
+## The 4-step method, unchanged
+
+Restate → brute force → name the bottleneck → reach for the right structure.
+Today adds the structure menu:
+
+| Structure | Superpower | O | Think |
+|---|---|---|---|
+| stack (LIFO) | undo/nesting | push/pop O(1) | last in, first out |
+| queue (FIFO) | fair ordering | enqueue/deq O(1) | BFS preview |
+| recursion | divide & conquer | call-stack cost | base case or die |
+| binary search | halving | O(log n) | sorted input required |
+| memoization | remember subproblems | turns exp → n | recursion + cache |
+
+## Problem 1 — Valid Parentheses (the stack poster child)
+
+> Is the bracket string well-formed? `"([]{})"` yes; `"([)]"` no.
+
+Insight: every closer must match the *most recent* opener — that's LIFO.
+Walk the string: push openers; on a closer, pop and compare.
+
+```{pyodide}
+#| label: parens-py
+def valid_parens(s: str) -> bool:
+    pairs = {")": "(", "]": "[", "}": "{"}
+    stack = []
+    for ch in s:
+        if ch in "([{":
+            stack.append(ch)
+        elif not stack or stack.pop() != pairs[ch]:
+            return False
+    return not stack          # leftovers = unclosed openers
+
+print(valid_parens("([]{})"), valid_parens("([)]"), valid_parens("(("))
+```
+
+```{webr}
+#| label: parens-r
+valid_parens <- function(s) {
+  pairs <- c(")" = "(", "]" = "[", "}" = "{")
+  stack <- character(0)
+  for (ch in strsplit(s, "")[[1]]) {
+    if (ch %in% c("(", "[", "{")) {
+      stack <- c(stack, ch)                    # push
+    } else {
+      if (!length(stack) || stack[length(stack)] != pairs[[ch]]) return(FALSE)
+      stack <- stack[-length(stack)]           # pop
+    }
+  }
+  length(stack) == 0
+}
+
+valid_parens("([]{})")
+valid_parens("([)]")
+```
+
+Both O(n). Note R's honest verbosity: `stack[-length(stack)]` *is* a pop —
+R vectors copy, Python lists mutate. Same algorithm, different physics.
+
+## Problem 2 — Binary Search (halving)
+
+> Find x in a **sorted** array. Return its index or −1/NULL.
+
+Brute force is a scan, O(n). Sorted data buys you halving: compare the
+middle, discard half, repeat — O(log n). A million elements = 20 probes.
+
+```{pyodide}
+#| label: bsearch-py
+def bsearch(xs: list[int], target: int) -> int:
+    lo, hi = 0, len(xs) - 1
+    while lo <= hi:
+        mid = (lo + hi) // 2
+        if xs[mid] == target:
+            return mid
+        if xs[mid] < target:
+            lo = mid + 1
+        else:
+            hi = mid - 1
+    return -1
+
+print(bsearch([1, 3, 5, 7, 9, 11], 7), bsearch([1, 3, 5], 4))
+```
+
+```{webr}
+#| label: bsearch-r
+bsearch <- function(xs, target) {
+  lo <- 1L; hi <- length(xs)          # R is 1-based; the ONLY change
+  while (lo <= hi) {
+    mid <- (lo + hi) %/% 2
+    if (xs[mid] == target) return(mid)
+    if (xs[mid] < target) lo <- mid + 1 else hi <- mid - 1
+  }
+  NA_integer_
+}
+
+bsearch(c(1, 3, 5, 7, 9, 11), 7)
+bsearch(c(1, 3, 5), 4)
+```
+
+::: {.callout-warning}
+## The infinite-loop trap
+`while (lo <= hi)` with `lo = mid` (not `mid ± 1`) never shrinks the window
+→ infinite loop. Every branch must exclude `mid`. This is *the* binary
+search bug; burn it in now.
+:::
+
+## Problem 3 — First Bad Version (binary search's real shape)
+
+> Versions 1..n; one "bad" boundary exists: everything from version k on is
+> bad. Find k with the fewest checks. (This is `git bisect` — you will use
+> this pattern on real broken pipelines.)
+
+```{pyodide}
+#| label: badversion-py
+def first_bad(n: int, is_bad) -> int:
+    lo, hi = 1, n
+    while lo < hi:                    # note: <, converging on a boundary
+        mid = (lo + hi) // 2
+        if is_bad(mid):
+            hi = mid                  # bad: mid COULD be the answer
+        else:
+            lo = mid + 1              # good: answer is strictly right
+    return lo
+
+print(first_bad(100, lambda v: v >= 42))
+```
+
+Two takeaways: the **boundary variant** uses `lo < hi` and never discards
+`mid` on the interesting side; and binary search generalizes beyond arrays
+to any monotone predicate — "first commit that fails QC", "lowest dose with
+effect".
+
+## Problem 4 — Fibonacci: recursion's cautionary tale
+
+```{pyodide}
+#| label: fib-py
+import time
+
+def fib_naive(n: int) -> int:
+    if n < 2:
+        return n
+    return fib_naive(n - 1) + fib_naive(n - 2)     # 2^n: recomputes everything
+
+def fib_memo(n: int, _cache={}) -> int:            # memoized: O(n)
+    if n < 2:
+        return n
+    if n not in _cache:
+        _cache[n] = fib_memo(n - 1) + fib_memo(n - 2)
+    return _cache[n]
+
+t0 = time.time(); fib_memo(30); t1 = time.time()
+print(f"memo(30): {t1 - t0:.5f}s   (naive(30) would make 2.7 million calls)")
+```
+
+```{webr}
+#| label: fib-r
+fib_memo <- local({
+  cache <- list()
+  function(n) {
+    key <- as.character(n)
+    if (n < 2) return(n)
+    if (!key %in% names(cache)) {
+      cache[[key]] <<- fib_memo(n - 1) + fib_memo(n - 2)   # <<- = enclosing env
+    }
+    cache[[key]]
+  }
+})
+
+fib_memo(30)
+```
+
+Same recursion, one addition: **remember results you already computed**.
+Exponential → linear. That's dynamic programming's entire secret.
+
+::: {.callout-tip}
+## Where you'll actually use this
+Pairwise alignment (Needleman–Wunsch), HMM decoding (the Viterbi you'll
+build in Week 5), and RNA secondary-structure prediction are DP. Same
+shape: big problem = small subproblems + a cache/table.
+:::
+
+## Problem 5 — Climb Stairs (bottom-up DP)
+
+> Staircase of n steps; climb 1 or 2 at a time. How many distinct ways?
+
+Ways(n) = Ways(n−1) + Ways(n−2) — Fibonacci in a trench coat. Bottom-up DP
+tabulates from the base case, no recursion, no stack:
+
+```{pyodide}
+#| label: stairs-py
+def climb_stairs(n: int) -> int:
+    a, b = 1, 1                     # ways(0), ways(1)
+    for _ in range(n - 1):
+        a, b = b, a + b
+    return b
+
+print([climb_stairs(n) for n in range(1, 7)])   # 1 2 3 5 8 13
+```
+
+```{webr}
+#| label: stairs-r
+climb_stairs <- function(n) {
+  a <- 1; b <- 1
+  for (i in seq_len(n - 1)) {
+    t <- a + b; a <- b; b <- t
+  }
+  b
+}
+
+sapply(1:6, climb_stairs)
+```
+
+O(n) time, O(1) space. Top-down (memoized recursion) vs bottom-up (table)
+are equivalent — bottom-up avoids recursion limits and is usually faster.
+
+## Drills (live pad)
+
+```{pyodide}
+#| label: drills
+# 1. valid_parens("({[]})") — predict, then run
+
+# 2. valid_parens(")") — which branch catches it? (comment)
+
+# 3. bsearch on [2, 4, 6, 8] for target 8 — exactly how many probes? Count them!
+
+# 4. first_bad(10, lambda v: v >= 1) — predict, then run
+
+# 5. fib_memo vs fib_naive: count calls of fib_naive(10) — add a counter
+
+# 6. climb_stairs(10) — predict via Fibonacci intuition first
+
+# 7. Reverse a string with a stack (loop + pop)
+
+# 8. Binary search recursive version — write it, test on [1,3,5,7]
+
+# 9. What breaks: bsearch on an UNSORTED list? (comment — no error!)
+
+# 10. Memoize factorial the same way fib_memo works
+```
+
+::: {.callout-tip collapse="true"}
+## Expected answers
+1. `True`
+2. the `elif not stack` branch — closer with empty stack
+3. 3 probes: mid→6 (lo=3), mid→6... careful: [2,4,6,8], 1-based: mid=2→4<8,
+   mid=3→6<8, mid=4→8 found. 3 probes, not log2(4)=2 — ceilings matter
+4. `1` — every version ≥1 is bad; boundary converges to 1
+5. 177 calls for n=10 (vs 19 memoized incl. cache hits)
+6. `89` — Fibonacci #10
+7. push all chars, pop all — reversed
+8. base: `if lo > hi: return -1`; recurse on halves
+9. silently wrong results — sortedness is a *precondition*, not checked
+10. `fact_memo(n, _c={0: 1}): if n in _c: return _c[n]; _c[n] = n * fact_memo(n-1, _c); return _c[n]`
+:::
+
+## Exercises
+
+### Exercise 1 — min stack
+
+A stack that also answers `min()` in O(1). Two stacks: values + running
+minimums.
+
+```{pyodide}
+#| exercise: ex-w3d4-minstack
+class MinStack:
+    ______
+
+ms = MinStack()
+for x in (5, 3, 7, 1):
+    ms.push(x)
+ms.pop()              # removes 1
+print(ms.min())       # 3
+```
+
+::: {.hint exercise="ex-w3d4-minstack"}
+`self.vals = []`, `self.mins = []`; push appends `min(x, mins[-1] if mins else x)`
+to mins; `min()` returns `mins[-1]`.
+:::
+
+::: {.solution exercise="ex-w3d4-minstack"}
+```python
+class MinStack:
+    def __init__(self):
+        self.vals, self.mins = [], []
+
+    def push(self, x):
+        self.vals.append(x)
+        self.mins.append(min(x, self.mins[-1]) if self.mins else x)
+
+    def pop(self):
+        self.vals.pop(); self.mins.pop()
+
+    def min(self):
+        return self.mins[-1]
+```
+:::
+
+### Exercise 2 — binary search: leftmost occurrence
+
+Sorted array with duplicates: return the index of the FIRST occurrence of
+target (or -1).
+
+```{pyodide}
+#| exercise: ex-w3d4-leftmost
+def leftmost(xs: list[int], target: int) -> int:
+    ______
+
+print(leftmost([1, 2, 2, 2, 3], 2))   # 1
+```
+
+::: {.hint exercise="ex-w3d4-leftmost"}
+Boundary-style: on `xs[mid] == target`, record it and keep searching LEFT
+(`hi = mid - 1`).
+:::
+
+::: {.solution exercise="ex-w3d4-leftmost"}
+```python
+def leftmost(xs, target):
+    lo, hi, ans = 0, len(xs) - 1, -1
+    while lo <= hi:
+        mid = (lo + hi) // 2
+        if xs[mid] == target:
+            ans = mid
+            hi = mid - 1          # keep looking left
+        elif xs[mid] < target:
+            lo = mid + 1
+        else:
+            hi = mid - 1
+    return ans
+```
+:::
+
+### Exercise 3 — the same, in R
+
+```{webr}
+#| exercise: ex-w3d4-leftmost-r
+leftmost_r <- function(xs, target) {
+  ______
+}
+
+leftmost_r(c(1, 2, 2, 2, 3), 2)   # 2 (1-based!)
+```
+
+::: {.hint exercise="ex-w3d4-leftmost-r"}
+Identical loop, 1-based indices, `NA_integer_` as the miss sentinel.
+:::
+
+::: {.solution exercise="ex-w3d4-leftmost-r"}
+```r
+leftmost_r <- function(xs, target) {
+  lo <- 1L; hi <- length(xs); ans <- NA_integer_
+  while (lo <= hi) {
+    mid <- (lo + hi) %/% 2
+    if (xs[mid] == target) { ans <- mid; hi <- mid - 1 }
+    else if (xs[mid] < target) lo <- mid + 1
+    else hi <- mid - 1
+  }
+  ans
+}
+```
+:::
+
+### Exercise 4 — recursion: nested sum
+
+Sum a list that may contain numbers OR nested lists (arbitrary depth).
+Recursion is the only clean tool.
+
+```{pyodide}
+#| exercise: ex-w3d4-nestsum
+def deep_sum(x) -> int:
+    ______
+
+print(deep_sum([1, [2, [3, 4]], 5]))   # 15
+```
+
+::: {.hint exercise="ex-w3d4-nestsum"}
+`sum(deep_sum(i) for i in x) if isinstance(x, list) else x` — the base case
+is "not a list".
+:::
+
+::: {.solution exercise="ex-w3d4-nestsum"}
+```python
+def deep_sum(x):
+    if isinstance(x, list):
+        return sum(deep_sum(item) for item in x)
+    return x
+```
+:::
+
+### Exercise 5 — DP with a twist: House Robber
+
+Pick values from a row of houses, no two adjacent. Maximize the take.
+`best(i) = max(best(i-1), best(i-2) + value[i])` — bottom-up, O(n).
+
+```{pyodide}
+#| exercise: ex-w3d4-robber
+def rob(houses: list[int]) -> int:
+    ______
+
+print(rob([2, 7, 9, 3, 1]))   # 12 (2 + 9 + 1)
+```
+
+::: {.hint exercise="ex-w3d4-robber"}
+Track `take_prev, skip_prev`; for each house:
+`take_prev, skip_prev = skip_prev + h, max(take_prev, skip_prev)`.
+Answer: `max(take_prev, skip_prev)`.
+:::
+
+::: {.solution exercise="ex-w3d4-robber"}
+```python
+def rob(houses):
+    take_prev, skip_prev = 0, 0
+    for h in houses:
+        take_prev, skip_prev = skip_prev + h, max(take_prev, skip_prev)
+    return max(take_prev, skip_prev)
+```
+:::
+
+## Common pitfalls (real ones)
+
+::: {.callout-warning}
+## 1. Binary search on unsorted data
+No error — silently wrong answers. The precondition is invisible; if you
+didn't sort it *in the same function*, assert it.
+:::
+
+::: {.callout-warning}
+## 2. Recursion without a base case (or with an unreachable one)
+Python raises `RecursionError` around depth 1000; R errors with
+"evaluation nested too deeply". Memoized R closures also need `<<-` — plain
+`<-` would write a LOCAL copy and the cache would never fill.
+:::
+
+::: {.callout-warning}
+## 3. Mutable default as memo cache
+`def fib(n, _cache={})` works (W3D1 taught you why!) but is fragile — three
+calls with different "intended" fresh states share one cache. Prefer
+`functools.lru_cache` or an explicit dict you pass around.
+:::
+
+## Self-quiz — predict the output
+
+```{pyodide}
+#| label: quiz
+# Q1: what prints?
+print(valid_parens(""))
+
+# Q2: what prints?
+print(bsearch([5], 5))
+
+# Q3: how many total calls does fib_naive(5) make? (draw the tree!)
+
+# Q4: what prints?
+print(climb_stairs(0) if False else climb_stairs(3))
+
+# Q5: trap — what prints and why?
+stack = []
+stack.append(1); stack.append(2)
+print(stack.pop(0))
+```
+
+::: {.callout-tip collapse="true"}
+## Quiz answers
+1. `True` — empty string is well-formed (and the leftover check passes)
+2. `0` — single element; first probe hits
+3. 15 calls — 1 for n=5, plus two subtrees; the count IS the 2^n blowup
+4. `3` — ways(3) = ways(2)+ways(1) = 3; base cases 1,1
+5. `1` — `pop(0)` pops the FRONT (queue behavior, O(n)); plain `.pop()` pops
+   the end (stack behavior, O(1)). Know which one you're calling.
+:::
+
+## Wrap-up checklist
+
+- [ ] Stack = LIFO via list/vector; I can validate nesting with one
+- [ ] Binary search: `mid ± 1` always shrinks; sortedness is a precondition
+- [ ] Boundary variant: `lo < hi`, keep mid on the interesting side
+- [ ] Memoization turns exponential recursion linear; `<<-` in R closures
+- [ ] Bottom-up DP = recursion's table twin, no stack limits
+- [ ] I scored 5/5 on the self-quiz
+
+**Tomorrow:** Project 3 — implement `bioseqkit` in both languages and turn
+the CI green.
