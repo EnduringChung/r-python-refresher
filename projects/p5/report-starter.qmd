@@ -1,0 +1,77 @@
+---
+title: "Capstone — Multi-omics Mini-study"
+subtitle: "Project 5 · your name · the date you ran it"
+format: html
+engine: knitr
+execute:
+  echo: true
+  warning: false
+---
+
+## Setup
+
+```{r}
+#| label: setup
+library(tidyverse)
+set.seed(2026)
+
+meta <- read_csv("data/capstone_meta.csv", show_col_types = FALSE)
+rna  <- read_csv("data/capstone_rna_counts.csv", show_col_types = FALSE)
+dim(meta); dim(rna)
+```
+
+**Question:** TODO — one sentence.
+
+## QC
+
+```{r}
+#| label: qc
+# TODO: IQR fence on totals; which batch do the flagged samples come from?
+# gene detection filter; protein missingness check
+```
+
+## Normalization + EDA
+
+```{r}
+#| label: eda
+# TODO: normalize-to-median + log1p; histogram; PCA colored by condition,
+# cell_type, batch — state honestly which structure dominates PC1
+```
+
+## Differential expression
+
+```{r}
+#| label: de
+# TODO: Welch per gene (vectorized or purrr), BH FDR, volcano plot,
+# batch check with Jaccard overlap
+```
+
+## Multi-view integration
+
+```{r}
+#| label: integration
+# TODO: z-score both views, concat + PCA; CCA vs the protein view
+```
+
+## Classifier
+
+```{r}
+#| label: classifier
+# TODO: logistic regression on top-20 DE genes, stratified split,
+# seed 2026, confusion matrix
+```
+
+## Conclusion
+
+TODO — ≤ 8 sentences: findings at what FDR, the batch verdict, what the
+protein view adds, what the classifier adds, next steps.
+
+## Receipt
+
+```{r}
+#| label: receipt
+Sys.time() |> format(tz = "UTC", usetz = TRUE)
+tools::md5sum(c("data/capstone_meta.csv", "data/capstone_rna_counts.csv",
+                "data/capstone_protein.csv"))
+sessionInfo()
+```

@@ -137,7 +137,7 @@ q1, q3 = totals.quantile([0.25, 0.75])
 iqr = q3 - q1
 fence = (totals >= q1 - 1.5 * iqr) & (totals <= q3 + 1.5 * iqr)
 print("median total:", round(totals.median(), 0))
-print("fence:", (q1 - 1.5 * iqr).round(0), "to", (q3 + 1.5 * iqr).round(0))
+print("fence:", round(q1 - 1.5 * iqr, 0), "to", round(q3 + 1.5 * iqr, 0))
 print("flagged:", (~fence).sum(), "of", len(totals))
 ```
 

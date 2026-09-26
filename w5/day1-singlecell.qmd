@@ -300,12 +300,12 @@ counts, report how many of each true type got flagged. Python:
 #| exercise: ex-d1-doublet
 import numpy as np, pandas as pd
 rng = np.random.default_rng(11)
-totals = pd.Series(rng.lognormal(0, 0.3, 300).round(), name="total")
+totals = pd.Series(rng.lognormal(0, 0.5, 300), name="total")
 truth = np.repeat(["A", "B", "C"], 100)
 
 thresh = ______
 flagged = ______
-print("threshold:", thresh, "| flagged:", flagged.sum())
+print("threshold:", round(thresh, 1), "| flagged:", flagged.sum())
 print(pd.crosstab(truth, flagged))
 ```
 
@@ -348,11 +348,11 @@ order(______, decreasing = TRUE)[1:3]        # top-3 after log1p
 
 ::: {.solution exercise="ex-d1-hvg-r"}
 ```r
-order(apply(M, 2, var), decreasing = TRUE)[1:3]        # e.g. 5 4 2
-order(apply(log1p(M), 2, var), decreasing = TRUE)[1:3] # 2 4 5 — same set,
-# different order: log compresses big values, so high-count genes lose rank.
-# At 20k genes the *set* changes too — which is why HVG selection happens
-# after log1p in every real pipeline.
+order(apply(M, 2, var), decreasing = TRUE)[1:3]        # 3 5 4
+order(apply(log1p(M), 2, var), decreasing = TRUE)[1:3] # 3 5 1
+# The top-3 SET changes (4 drops out, 1 enters): log compresses big values,
+# so high-count genes lose rank. At 20k genes the reshuffling is larger —
+# which is why HVG selection happens after log1p in every real pipeline.
 ```
 :::
 
@@ -434,12 +434,13 @@ marker gene with the highest mean normalized expression. (R version —
 ```{webr}
 #| exercise: ex-d1-markers
 # tiny stand-in: 12 cells, 4 genes, 2 clusters
-M <- matrix(c(9, 8, 1, 4,  2, 3, 7, 9,  8, 1, 2, 9,
-              1, 2, 9, 8,  7, 9, 2, 1,  2, 8, 9, 1,
-              4, 5, 4, 5,  5, 4, 5, 4,  5, 4, 4, 5,
-              5, 4, 5, 4,  4, 5, 4, 5,  4, 5, 5, 4),
+M <- matrix(c(9, 8, 9, 7, 8, 9, 2, 1, 1, 3, 2, 1,     # CD1: high in c1
+              1, 2, 1, 3, 2, 1, 8, 9, 9, 7, 8, 9,     # CD2: high in c2
+              5, 4, 5, 4, 4, 5, 5, 4, 5, 4, 4, 5,     # housekeeping
+              4, 5, 4, 5, 5, 4, 4, 5, 4, 5, 5, 4),
             nrow = 12)
-cluster <- c(1, 1, 2, 2, 1, 1, 2, 2, 2, 1, 2, 1)
+colnames(M) <- paste0("CD", 1:4)
+cluster <- c(1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 2)
 
 t(sapply(split(seq_len(12), cluster), function(ix) {
   ______        # which gene (column) has max mean in this cluster?
@@ -457,8 +458,8 @@ t(sapply(split(seq_len(12), cluster), function(ix) {
   cm <- colMeans(M[ix, , drop = FALSE])
   c(gene = colnames(M)[which.max(cm)], mean = round(max(cm), 2))
 }))
-# cluster 1 -> column 1 (CD1-like), cluster 2 -> column 2: exactly the
-# scanpy rank_genes_groups move on a diet.
+# cluster 1 -> CD1, cluster 2 -> CD2: exactly the scanpy
+# rank_genes_groups move on a diet.
 ```
 :::
 

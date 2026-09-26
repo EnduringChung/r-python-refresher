@@ -37,8 +37,9 @@ pvals <- 2 * pt(-abs(tstat), df)
 
 ## Benjamini-Hochberg ----
 o <- order(pvals)
+adj <- pvals[o] * length(pvals) / seq_along(pvals)
 fdr <- numeric(length(pvals))
-fdr[o] <- pmin(cummin(pvals[o] * length(pvals) / seq_along(pvals)), 1)
+fdr[o] <- pmin(rev(cummin(rev(adj))), 1)   # cummin runs LARGEST -> smallest
 sig <- which(fdr < 0.05)
 cat("DE genes at FDR < 0.05:", length(sig), "\n")
 cat("up-regulated:", sum((mx - my)[sig] > 0), "\n")
